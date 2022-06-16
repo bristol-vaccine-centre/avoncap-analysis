@@ -1,9 +1,12 @@
+.csv
+
 # History files
 .Rhistory
 .Rapp.history
 
 # Session Data files
 .RData
+.RDataTmp
 
 # User-specific files
 .Ruserdata
@@ -24,6 +27,11 @@
 vignettes/*.html
 vignettes/*.pdf
 
+# any knitted files
+**/*.html
+**/*.pdf
+
+
 # OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
 .httr-oauth
 
@@ -37,3 +45,15 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+# pkgdown site
+docs/
+
+# translation temp files
+po/*~
+
+# RStudio Connect folder
+rsconnect/
+
+input/*
+output/*

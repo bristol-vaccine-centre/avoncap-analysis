@@ -1,0 +1,941 @@
+---
+title: "The severity of clinical outcomes of patients in hospital are influenced by the genomic variant of SARS-CoV-2 and vaccination status."
+author: "Rob Challen"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = TRUE,
+  warning = TRUE
+)
+here::i_am("omicron-severe-disease/omicron-severe-disease-rr.Rmd")
+source(here::here("common-setup.R"))
+source(here::here("model-bootstrapping.R"))
+
+source(here::here("omicron-severe-disease/avoncap-variants-data.R"))
+
+out = outputter(directory=here::here("output/omicron-severe-disease-rr"),datedSubdirectory = TRUE,datedFile = FALSE)
+sup = data_supplement(out = out)
+
+#options(reproduce.at="2022-03-07")
+options(reproduce.at="2022-04-04")
+options(hide.supplementary.tables=FALSE)
+
+options(dtrackr.strata_glue="{.value}")
+options(dtrackr.strata_sep=", ")
+options(dtrackr.default_message="{.count} subjects")
+options(dtrackr.show_zero_exclusions=FALSE)
+
+options(use.wilcoxon=TRUE)
+```
+
+# Background
+
+# Materials
+
+* Excluding repeat admissions as determined by NHS number.
+* Using inferred cases as `admission.date > "2022-01-24" ~ "Omicron", admission.date > "2021-11-01" ~ NA_character_, admission.date > "2021-06-01" ~ "Delta"`
+
+```{r F1_materials_flowchart}
+avoncap_raw = load_data() 
+write(x = attr(avoncap_raw,"file"), file = out("data_sources.txt"))
+
+avoncap_original = avoncap_raw %>% normalise_data() 
+avoncap_variants_data = avoncap_original %>% avoncap_variants()
+v=avoncap_variants_data %>% get_value_sets()
+# Analysis specific 
+raw_data  = avoncap_variants_data  
+raw_data %>% excluded() %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
+
+raw_data %>% flowchart(filename = out("fig1-data-flow"))
+
+raw_data = raw_data %>% untrack()
+```
+
+* What details do we have about repeat admissions?
+* Interval for repeat admissions shorter for Delta, within 7 days. Maybe due to re-admission only counting after 30 days?
+* Vaccination in re-admissions follows other patterns
+
+```{r cut_off_analysis}
+# why did we chose these specific outcomes:
+# avoncap_variants_data %>% ungroup() %>% count()
+# avoncap_variants_data %>% group_by(day_7.length_of_stay) %>% count()
+# raw_data %>% mutate(tmp = day_7.length_of_stay > v$day_7.length_of_stay$`6 day` | day_7.length_of_stay == v$day_7.length_of_stay$`still inpatient`  | day_7.death == v$day_7.death$yes) %>% group_by(tmp) %>% count()
+# 
+# tmp1 = raw_data %>% group_by(genomic.variant_inferred, day_7.length_of_stay) %>% summarise(count = n()) %>% mutate(cum = cumsum(count)) %>% mutate(binom::binom.confint(cum, sum(count),methods = "wilson"))
+# p1 = ggplot(tmp1, aes(x=day_7.length_of_stay, y=mean*100, ymin=lower*100, ymax=upper*100,fill=genomic.variant_inferred,colour=genomic.variant_inferred))+
+#   geom_bar(stat="identity",position=position_dodge(width = 0.7),width=0.7, alpha=0.2)+
+#   geom_errorbar(colour="black", position=position_dodge(width = 0.7), width=0.5)+
+#   ylab("Cumulative proportion")+
+#   xlab("Length of stay less than or equal to")+
+#   scale_color_brewer(palette = "Dark2",name="",aesthetics = c("fill","colour"))
+#   
+# 
+# tmp = raw_data %>% group_by(genomic.variant_inferred, day_7.max_o2_level) %>% summarise(count = n()) %>% mutate(cum = cumsum(count)) %>% mutate(binom::binom.confint(cum, sum(count),methods = "wilson"))
+# p2 = ggplot(tmp, aes(x=day_7.max_o2_level, y=mean*100, ymin=lower*100, ymax=upper*100,fill=genomic.variant_inferred,colour=genomic.variant_inferred))+
+#   geom_bar(stat="identity",position=position_dodge(width = 0.7),width=0.7, alpha=0.2)+
+#   geom_errorbar(colour="black", position=position_dodge(width = 0.7), width=0.5)+
+#   ylab("Cumulative proportion")+xlab("Max FiO\u2082 level less than or equal to")+
+#   scale_color_brewer(palette = "Dark2",name="",aesthetics = c("fill","colour"))
+# 
+# p = p1+p2+patchwork::plot_annotation(tag_levels = "A")+patchwork::plot_layout(guides = "collect")
+# 
+# p %>% gg_save_as(out("fig-S1-cut-offs-for-ordered"))
+
+```
+
+```{r repeat_admissions}
+# 
+# repeats = raw_data %>% excluded(simplify = FALSE) %>% filter(.message %>% stringr::str_ends("repeat admissions")) %>% 
+#   unnest(.excluded)
+# 
+# repeats %>%
+#   compare_population(populationVar = genomic.variant_inferred, comparisonVars = vars(
+#   demog.age,
+#   demog.gender,
+#   demog.ethnicity,
+#   admission.BMI,
+#   admission.charlson_comorbidity_index,
+#   qcovid2.hazard_ratio,
+#   vaccination.vaccination,
+#   admission.interval)) %>% population_comparison_table() %>% hux_auto_widths()
+# 
+# patchwork::wrap_plots(repeats %>% plot_population(populationVar = genomic.variant_inferred, comparisonVars = vars(admission.interval,vaccination.vaccination)))
+```
+
+
+# Demographics of cohorts
+
+* Omicron admissions tendency to be older, more likely to be boosted, and with more co-morbidity
+* QCovid2 hazard of death given positive COVID test high in admitted patients (average context of hazard is community patient) but very much higher in Omicron patients. Survivor bias in that hospitalised patients with Omicron are more frail and elderly that those with Delta. Therefore we see lower risk patients not coming into hospital.
+
+```{r T1_demographics_by_variant}
+tmp = raw_data %>% compare_population(
+  populationVar = genomic.variant_inferred,
+  comparisonVars = vars(
+  demog.age,
+  demog.gender,
+  demog.ethnicity,
+  admission.BMI,
+  # admission.charlson_comorbidity_index,
+  admission.cci_category,
+  qcovid2.hazard_ratio,
+  vaccination.vaccination,
+  admission.on_immunosuppression
+  # These are the main outcomes:
+  # day_7.max_o2_gt_28,
+  # day_7.los_gt_3,
+  # day_7.WHO_score_gt_5
+  ))
+h = tmp %>% population_comparison_table(show_method = FALSE) 
+
+h %>% hux_auto_widths() %>%
+  huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) %>%
+  hux_save_as(out("table1-population-comparison"),size=ggrrr::std_size$landscape,formats = c("html","docx","pdf","png"))
+```
+
+```{r S1_comorbidities}
+tmp = raw_data %>% 
+  compare_population(
+    populationVar = genomic.variant_inferred,
+    comparisonVars = vars(
+    comorbid.no_resp_dx, comorbid.copd, comorbid.asthma, comorbid.resp_other, 
+    comorbid.no_heart_dx, comorbid.ccf, comorbid.ihd, comorbid.hypertension, comorbid.other_heart_dx, 
+    comorbid.diabetes_type, comorbid.cva, comorbid.tia, comorbid.no_neuro_dx, 
+    comorbid.no_dementia, 
+    comorbid.dementia, comorbid.cognitive_impairment, 
+    comorbid.solid_cancer_present, comorbid.no_haemotological_cancer, comorbid.leukaemia, comorbid.lymphoma, comorbid.ckd, comorbid.liver_disease, 
+    comorbid.periph_vasc_dx, comorbid.connective_tissue_dx, comorbid.immunodeficiency, comorbid.transplant_recipient, admission.on_immunosuppression
+  ))
+h3 = tmp %>% population_comparison_table() 
+h3 %>% sup$add_table(
+  caption = "Comorbidities in patients presenting with Omicron and Delta infections. Omicron infected people were significantly more likely to have pre-existing heart disease, hypertension, atrial fibrilation, dementia, mild CKD, and peripheral vascular disease, than the Delta infected cases. This is reflective of the observation from the main paper that Omicron infected patients are generally older with more comorbidities. This is potentially a combination of milder disease and improving vaccination coverage.",
+  footnote = "CCF, congestive cardiac failure; COPD, chronic obstructive pulmonary disease; CKD, chronic kidney disease; CVA, cerebrovascular accident; IHD, ischaemic heart disease; TIA, transient ischaemic attack\n\nHypertension was only included if causing other cardiac complications.\nCKD was classified as mild if stage 1-3; moderate/severe if stage 4-5, end-stage renal failure or there was dialysis dependence",
+  index=1)
+
+significantComorbid = tmp %>% filter(p.excluding_missing < 0.05) %>% select(variable.original) %>% distinct() %>% pull(variable.original) %>% readable_label_mapping() %>% unname() %>% paste(collapse=", ")
+
+```
+
+* comorbidities associated with Omicron patients:
+* significant comorbidities: `r significantComorbid`
+
+
+```{r S2_vaccination_brands}
+
+# Vaccination dose 
+
+tmp = raw_data %>% compare_population(
+  populationVar = genomic.variant_inferred,
+  comparisonVars = vars(vaccination.brand_combination))
+h2 = tmp %>% population_comparison_table() 
+h2 %>% sup$add_table(
+  caption = "Vaccination brand combinations in Delta and Omicron infected cases. Over the time of the study both vaccination rates changed as did the composition of cases. The statistical significance of the association between variant infections and vaccination is at least in part a result of this temporal association. The brands used are represented by Pf for Pfizer, AZ for AstraZeneca, Mo for Moderna and Ja for Jannsen. A vaccine brand of 'xx' represents no dose recieved, and '??' a dose was received but the brand is unknown",
+  footnote = "AZ, ChAdOx1nCoV19 vaccine (Oxford, AstraZeneca - Vaxzevria\u00AE); Pf, BNT162b2 vaccine (Pfizer, Cominarty\u00AE); Mo, mRNA-1273 (Moderna, Spikevax\u00AE)",
+  index=2)
+
+```
+
+* Not enough data to do any kind of vaccination dose schedule analysis
+* N.B. this already excludes 1 dose / partial vaccination (including those with second dose < 7 days before symptom onset)
+
+# Interaction between time, variant, susceptability and vaccination
+
+* Complex interaction due to vaccination targeting and roll out.
+* Later time periods frail people more likely to be vaccinated + boosted.
+* However also more likely to have Omicron
+* In later time periods young people more likely to have been boosted also => they will not be in the data set.
+* Probably need some comparison with general population vaccination status and general population age specific levels of infection.
+* Omicron admissions appear to be in people with higher morbidity scores. Possibly as fewer relatively healthy people being admitted. Impossible to know if this is because of omicron or because of increased vaccination in younger people over time.
+
+```{r F2_timeline,fig.cap="Interaction between time, vaccination status, frailty indicators, and genomic variant",fig.width=6, fig.height=6}
+
+dates = full_seq(raw_data$admission.date, period=1)
+
+cases = raw_data %>% filter(admission.date %in% dates) %>%
+  group_by(genomic.variant_inferred,admission.date) %>% 
+  summarise(cases = n()) %>%
+  ungroup() %>% 
+  tidyr::complete(genomic.variant_inferred,admission.date=dates, fill=list(cases=0)) %>%
+  group_by(genomic.variant_inferred) %>% mutate(date =admission.date,value=cases)
+
+source(here::here("estimators.R"))
+
+cases2 = cases %>% group_modify(function(d,g,...) {
+  locfitPoissonRateEstimate(d,degree = 1)
+})
+
+cutoffs = avoncap_original %>% untrack() %>% group_by(genomic.variant) %>% summarise(min = min(admission.date), max=max(admission.date)) %>% pivot_longer(cols = c(min,max)) %>%
+  filter((genomic.variant == "Omicron" & name == "min") | (genomic.variant == "Delta" & name == "max"))
+
+cutoffs
+
+p1 = ggplot(
+  cases2,
+  aes(x=admission.date, colour=genomic.variant_inferred, fill=genomic.variant_inferred)
+)+
+  geom_ribbon(aes(ymin=Est.Quantile.0.025,ymax=Est.Quantile.0.975),alpha=0.1,colour=NA)+
+  geom_point(aes(y=value),size=0.025)+geom_line(aes(y=Est.Quantile.0.5))+scale_color_brewer(palette = "Dark2",name="",aesthetics = c("fill","colour"))+
+  geom_vline(data = cutoffs, aes(xintercept=value))+
+  coord_cartesian(ylim=c(0,20))+
+  scale_x_date(date_breaks = "2 weeks", limits = range(dates))+
+  ylab("admissions per day")
+
+# p1 = raw_data %>% ungroup() %>% plot_rolling(genomic.variant_inferred, window=15)+scale_color_brewer(palette = "Dark2",name="",aesthetics = c("fill","colour"))
+p2 = raw_data %>% ungroup() %>% plot_rolling(vaccination.vaccination, window=15)+scale_color_brewer(palette = "Set1",name="",aesthetics = c("fill","colour"))+geom_vline(data = cutoffs, aes(xintercept=value))
+p3 = raw_data %>% ungroup() %>% plot_rolling(demog.age_category, window=15)+scale_color_brewer(palette = "Set2",name="",aesthetics = c("fill","colour"))+geom_vline(data = cutoffs, aes(xintercept=value))+
+#p4 = raw_data %>% ungroup() %>% plot_rolling_quantiles(decileVar = qcovid2.log_hazard,orderVar = admission.date)+geom_point(size=0.025)+ylab("QCovid2 log hazard")+xlab("admission date")+
+    scale_x_date(date_breaks = "2 weeks", limits = range(dates))+geom_vline(data = cutoffs, aes(xintercept=value))
+
+# p5 = ggplot(raw_data, aes(x=admission.date,y=admission.charlson_comorbidity_index))+geom_point()+plot_rolling_quantiles()+ylab("CCI")+xlab("admission date")+
+#     scale_x_date(date_breaks = "2 weeks", limits = range(dates))
+
+# ggplot(raw_data, aes(x=admission.date, y = qcovid2.log_comorbid_hazard))+geom_point(size=0.025)+geom_smooth(method=loess,method.args=list(span=0.2))+ylab("Log")+xlab("admission date")
+
+p = p1+gg_hide_X_axis()+p2+gg_hide_X_axis()+p3+
+  #gg_hide_X_axis()+p4+
+  patchwork::plot_layout(ncol=1)+patchwork::plot_annotation(tag_levels="A")
+p %>% gg_save_as(out("fig2-timeline"), size = std_size$half)
+```
+
+```{r pregnancy_investigation} 
+# Pregnancy investigation
+# lapply(plot_population(avoncap_variants_data, populationVar = vaccination.vaccination, comparisonVars = vars(demog.age)), function(x) x+facet_grid(vaccination.vaccination~genomic.variant))
+# (raw_data %>% group_by(demog.age_category) %>% plot_rolling(demog.gender, days=14)+scale_color_brewer(palette = "Set2",name="",aesthetics = c("fill","colour")))+facet_wrap(vars(demog.age_category))
+# 
+# raw_data %>% mutate(is.pregnant = comorbid.pregnancy != v$comorbid.pregnancy$`Not pregnant`) %>% ungroup() %>% plot_rolling_quantiles(decileVar = demog.age,orderVar = admission.date)+geom_point(size=0.5, mapping=aes(colour=is.pregnant))+ylab("Age")+xlab("admission date")+scale_x_date(date_breaks = "2 weeks", limits = range(dates))+facet_wrap(vars(demog.gender))
+# 
+# ggplot(raw_data %>% mutate(is.pregnant = comorbid.pregnancy != v$comorbid.pregnancy$`Not pregnant`) %>% filter(is.pregnant), aes(x=admission.date))+geom_histogram()
+
+```
+
+# Outcomes
+
+* Outcomes appear milder for patients hospitalised with omicron.
+* Difficult to determine what is effect of increasing vaccination coverage, change in age profile of admissions and effect of omicron.
+* Complex interaction between vaccination and variant in terms of severe outcomes
+
+```{r F3_outcome,fig.cap="Outcome indicators on day 7 and stratified by vaccination status"}
+plots = avoncap_variants_data %>% plot_population(populationVar = genomic.variant_inferred, comparisonVars = vars(
+  day_7.max_o2_level,
+  day_7.WHO_clinical_progression,
+  day_7.length_of_stay
+  
+)) %>% lapply(function(x) x+gg_set_X_angle(45))
+
+p1 = raw_data %>% plot_outcome(day_7.max_o2_gt_28 == v$day_7.max_o2_gt_28$`over 28%`,"% on >28% FiO\u2082",stratifyBy = demog.age_category)+gg_hide_legend()+gg_set_X_angle(45)
+p2 = raw_data %>% plot_outcome(day_7.WHO_score_gt_5 == v$day_7.WHO_score_gt_5$`WHO score 6-10`,"% with WHO Outcome > 5",stratifyBy = demog.age_category)+gg_hide_legend()+gg_set_X_angle(45)
+p3 = raw_data %>% plot_outcome(day_7.los_gt_3 == v$day_7.los_gt_3$`LOS>3 days`,"% with LOS > 3 days",stratifyBy = demog.age_category)+gg_hide_legend()+gg_set_X_angle(45)
+
+plots2 = c(plots,list(p1),list(p2),list(p3))
+
+p = plots2 %>% patchwork::wrap_plots(guides="collect",ncol=3)+patchwork::plot_annotation(tag_levels = "A")
+p %>% gg_save_as(out("fig3-outcomes-and-interactions"), size = std_size$half)
+
+# This alternate version is just the histograms
+# pAlt = plots %>% patchwork::wrap_plots(guides="collect",ncol=3)+patchwork::plot_annotation(tag_levels = "A")
+# pAlt %>% gg_save_as(out("fig3-outcomes-alt"), size = std_size$third)
+
+
+```
+
+
+
+```{r a-priori_features}
+
+# TODO: looks interesting: https://bookdown.org/yihui/rmarkdown-cookbook/equatiomatic.html
+
+# This is the a-priori selection of features. There are several markers of frailty. We will use only one.
+coreFeatures = expr(c(
+  genomic.variant_inferred,
+  vaccination.vaccination,
+  demog.age_category,
+  admission.cci_category
+))
+
+# This is the a-priori selection of features. There are several alternate markers of frailty. We will use only one.
+allFeatures = expr(c(
+  !!coreFeatures,
+  admission.charlson_comorbidity_index,
+  qcovid2.log_hazard,
+  admission.rockwood_score,
+  demog.gender,
+  demog.ethnicity,
+  admission.on_immunosuppression,
+  demog.care_home_resident,
+  demog.imd_decile,
+  admission.duration_symptoms,
+  admin.hospital,
+  admission.week_no
+))
+
+# N.B.
+# admission.previous_covid_infection is not included as these patients should have been removed.
+
+aprioriVars = as_vars(!!allFeatures, data=raw_data)
+longlist = readable_label_mapping(aprioriVars) %>% unname() %>% paste0(collapse = ", ")
+
+main_outcomes = as_vars(c(day_7.max_o2_gt_28, day_7.WHO_score_gt_5, day_7.los_gt_3), data=raw_data)
+```
+
+```{r S3_population_comparison}
+
+comp = tibble(
+  outcome = c("Maximum oxygen requirement","WHO Outcome score","Length of stay"),
+  comparison = list(
+    raw_data %>% compare_population(populationVar = day_7.max_o2_gt_28, comparisonVars = aprioriVars),
+    raw_data %>% compare_population(populationVar = day_7.WHO_score_gt_5, comparisonVars = aprioriVars),
+    raw_data %>% compare_population(populationVar = day_7.los_gt_3, comparisonVars = aprioriVars)
+  )
+)
+
+# outcome = "of maximal oxygen requirements in the first 7 days exceeding 28%"
+# 
+# comp = raw_data %>% compare_population(populationVar = day_7.max_o2_gt_28,
+#   comparisonVars = allVars
+# )
+comp = comp %>% mutate(table = purrr::map2(outcome,comparison, ~ .y %>% 
+                                             population_comparison_table() %>% 
+                                             huxtable::insert_row(.x,fill="",colspan=8,after=0) %>%
+                                             huxtable::set_top_border(row = 1,value = 1) %>%
+                                             huxtable::set_bottom_border(row = 1,value = 1) %>%
+                                             huxtable::set_bold(row=1,col=1)
+                                           ))
+
+tmp = ggrrr::hux_bind_rows(comp$table) %>% hux_auto_widths()
+
+tmp %>% sup$add_table(
+  caption = "Explainatory variables in the comparison of the three binary outcomes. Significance tests describe the null hypothesis that the distribution of the explainatory variable is the same for both outcomes. p-values are given both excluding missing data, and, in parentheses, including missing data.", footnote = "CCI, charlson comorbidity index; IMD, index multiple deprivation; ", index=3)
+
+```
+
+```{r S4_missingness}
+
+comp = comp %>% mutate(
+  missing = list(
+    raw_data %>% compare_missingness(populationVar = day_7.max_o2_gt_28, comparisonVars = aprioriVars),
+    raw_data %>% compare_missingness(populationVar = day_7.WHO_score_gt_5, comparisonVars = aprioriVars),
+    raw_data %>% compare_missingness(populationVar = day_7.los_gt_3, comparisonVars = aprioriVars)
+  )
+)
+
+comp = comp %>% mutate(missing_table = purrr::map2(outcome,missing, ~ .y %>% 
+                                                    missing_comparison_table()  %>% 
+                                                    huxtable::insert_row(.x,fill="",colspan=7,after=0) %>%
+                                                    huxtable::set_top_border(row = 1,value = 1) %>%
+                                                    huxtable::set_bottom_border(row = 1,value = 1) %>%
+                                                    huxtable::set_bold(row=1,col=1)
+                                             ))
+
+t = ggrrr::hux_bind_rows(comp$missing_table) %>% hux_auto_widths()
+
+t %>% sup$add_table(
+  caption = "Impact of missing values on the comparison of the three binary outcomes. Significance tests describe the null hypothesis that the distribution of missing values is the same for both outcomes. High p-values indicate data is missing at random, compared to the outcome. Low p-values suggest a systematic interaction between missing data and outcome. Not all data points are collected for all patients.", 
+  footnote = "CCI, charlson comorbidity index; IMD, index multiple deprivation; no, number; LOS, length of stay; WHO, World health organisation", index=4)
+```
+
+```{r S5_feature_selection}
+#.x = comp$missing[[1]]
+comp = comp %>% mutate(invalid_features = purrr::map(missing, ~ 
+    .x %>% group_by(variable.original) %>%
+      mutate(p.missing_overall = sum(missing)/sum(missing+`not missing`)) %>%
+      select(variable.original, p.missing_at_random, p.missing_overall) %>% 
+      distinct() %>%
+      filter(p.missing_at_random <= 0.05 | p.missing_overall >= 0.05) %>%
+      pull(variable.original)
+))
+
+mnar = unique(unlist(comp$invalid_features))
+excludedlist = readable_label_mapping(lapply(mnar,as.symbol)) %>% unname() %>% paste0(collapse = ", ")
+
+allVars = aprioriVars[!as_label(aprioriVars) %in% mnar]
+validlist = readable_label_mapping(allVars) %>% unname() %>% paste0(collapse = ", ")
+
+tibble(
+  Stage = c("a-priori","excluded due to missingness","final set"),
+  Predictors = c(longlist, excludedlist, validlist)
+) %>% hux_default_layout()  %>% hux_auto_widths() %>% sup$add_table(
+  caption = "A-priori, and final feature sets considered in regression models based on analysis of missing data.", 
+  footnote = "CCI, charlson comorbidity index; IMD, index multiple deprivation; no, number; WHO, World health organisation", index=5)
+
+```
+
+* Long list of a-priori predictive variables considered: `r longlist`
+* Excluded due to missingness `r excludedlist`
+* List of valid predictive variables considered: `r validlist`
+
+* Missing data imputation using MICE
+* 10 imputations performed
+
+
+```{r imputation}
+# make sure logical and ordered data are vanilla factors. exclude dates.
+raw_data3 = raw_data %>% select(!!!allVars, day_7.max_o2_gt_28, day_7.max_o2_gt_35, day_7.max_o2_gt_50, day_7.WHO_score_gt_5, day_7.WHO_score_gt_6, day_7.los_gt_3, day_7.los_gt_7, day_7.los_gt_5) %>%
+  mutate(across(.cols = where(is.logical), .fns = ~ .x %>% factor(labels=c("false","true")))) %>%
+  mutate(across(.cols = where(is.ordered), .fns = ~ .x %>% factor(ordered = FALSE))) %>%
+  select(-where(is.Date))
+
+imputeFrom = sapply(allVars, as_label)
+# Configure mice imputation columns 
+init = mice::mice(raw_data3, maxit=0) 
+meth = init$method
+predM = init$predictorMatrix
+# only impute values in the model:
+meth[!(names(meth) %in% imputeFrom)] = ""
+# don't use for imputation
+predM[!(names(meth) %in% imputeFrom)] = 0
+# only use factors and numerics for imputation
+# predM[!(names(meth) %in% imputeFrom)] = 0
+set.seed(103)
+imputed = mice::mice(raw_data3, method=meth, predictorMatrix=predM, m=10,maxit = 5,printFlag=FALSE)
+
+# imputed = impute_data(raw_data3, allVars)
+fullImpute = bind_rows(lapply(1:10, function(.x) mice::complete(imputed,.x)))
+```
+
+
+
+```{r table_labels}
+
+captions = list(
+  table1 = "Feature selection for the comparison of the binary outcome {outcome}. Significance tests describe the null hypothesis that the distribution of the explainatory variable is the same for both outcomes. p-values are given both excluding missing data, and, in parentheses, incuding missing data.",
+  table2 = "Impact of missing values on the comparison of the binary outcome {outcome}. Significance tests describe the null hypothesis that the distribution of missing values is the same for both outcomes. High p-values indicate data is missing at random, compared to the outcome {outcome}. Low p-values suggest a systematic interaction between missing data and outcome. Not all data points are collected for all patients.",
+  table3 = "Features relevant to the comparison of the binary outcome {outcome}. These variables are demonstrated to be different between the two outcomes (p<0.05 excluding missing, p<0.1 including missing data) and exclude items where a systematic interaction between the missing data and outcomes is observed (p<0.05). P-values given in this table are for the null hypothesis that there is no association between this variable and the outcome {outcome}.",
+  table4 = "Univariate and multivariate robust poisson regression coefficients for the comparison of the binary outcome {outcome}. The univariate effects of each predictor are shown in the first column, the multivariate adjustment of all variables together, excluding the QCovid2 score is in the second column. The third column is a regression model focussing on the statistically significant variables, vaccination status, genomic variant, and the QCovid2 score. The fourth column is a regression model focussing on the statistically significant variables, vaccination status, genomic variant, Charlson comorbidity score, and age as a categorical value.",
+  table5 = "The performance of multivariate robust poisson models for the comparison of the binary outcome {outcome}. The Akiake information criterion, AIC, and Baeysian information criteria, BIC, describe the information lost by the model and lower numbers are better. Nagelkurke's R2 coefficient of determination is a psuedo R^2 meausure where higher numbers are better. RMSE is root mean squared error and Sigma is the residual standard deviation, a measure of the remaining unexpained variation in the data."
+)
+
+footnotes = list(
+  table1 = "BMI, body mass index; bp, blood pressure; CCI, charlson comorbidity index; CXR, chest Xray; IMD, index multiple deprivation; ivdu, intravenous drug usage; sd, standard deviation; T, temperature",
+  table2 = "BMI, body mass index; bp, blood pressure; CCI, charlson comorbidity index; CXR, chest Xray; IMD, index multiple deprivation; ivdu, intravenous drug usage; no, number; sd, standard deviation; T, temperature",
+  table3 = NULL,
+  table4 = "CCI, charlson comorbidity index; RR, relative risk",
+  table5 = "AIC, Akiake information criterion; BIC, Baeysian information criteria; RMSE, root mean squared error"
+)
+
+
+```
+
+# Outcome by outxcome regression models
+
+* Short list:
+* Univariate models: outcome versus each of the individual features
+* Multivariate models: outcome versus all of the individual features plus: genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
+* Stepwise parsimonious models, using AIC increase at a level where p<0.05 that model has improved at each additional step:
++ QCovid model: outcome versus forward selection of individual features + genomic.variant_inferred + vaccination.vaccination + qcovid2.log_hazard
++ Multivariate models: outcome versus forward selection of individual features + genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
++ Cross models: outcome versus forward selection of individual features + genomic.variant_inferred * vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
+
+* Comparative performance:
+
+https://stats.oarc.ucla.edu/other/mult-pkg/faq/general/faq-what-are-pseudo-r-squareds/
+
+
+```{r S6_to_S11_regression_models}
+
+baseCCIcat = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.cci_category")
+baseCCI = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index")
+baseRockwood = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.rockwood_score")
+baseQCovid = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + qcovid2.log_hazard") #spines::ns(qcovid2.log_hazard,3)") This is how to do the non linear terms
+
+additional = as.formula("~ . + demog.gender + demog.ethnicity + admission.on_immunosuppression + demog.care_home_resident + admission.duration_symptoms + admin.hospital + admission.week_no")
+
+crossCCIcat = as.formula(". ~ genomic.variant_inferred * vaccination.vaccination + demog.age_category + admission.cci_category")
+nonLinQCovid = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + spines::ns(qcovid2.log_hazard,3)")
+
+
+run_regressions = function(outcomeName, modelFn, outcome, index, ...) {
+  
+  lhs = as.formula(paste0(outcomeName," ~ ."))
+  
+  # The univariate models with all covariates: 
+  flist = lapply(allVars, function(x) update(lhs,(as.formula(paste0(". ~ ",as_label(x))))))
+  univariateConfig = tibble::tibble(
+    modelName = "Univariate",
+    form = flist
+  )
+  univModels = imputed %>% run_models(univariateConfig, robust_poisson)
+  
+  # This was the old code to run the stewise AIC
+  # minModelQcovid = glm(formula = fixedQcovid, family = binomial(), data = mice::complete(imputed,1))
+  # qcovidForm = formula(step(minModelQcovid,scope = update(fixedQcovid,additional), direction="forward", k = qchisq(0.05,1,lower.tail=FALSE),trace = 0))
+
+  # The multivariate models. Thanks to feedback we now have 4 different combinations of co-morbidities to deal with, with adjusted and unadjusted variants. 
+  # This is on top of the 3 outcomes.
+  multiConfig = tibble::tribble(
+    ~modelName, ~form,
+    "Age+CCI categorical", lhs %>% update(baseCCIcat),
+    "Age+CCI categorical (Adj)", lhs %>% update(baseCCIcat) %>% update(additional),
+    "Age+CCI", lhs %>% update(baseCCI),
+    "Age+CCI (Adj)", lhs %>% update(baseCCI) %>% update(additional),
+    "Age+Rockwood", lhs %>% update(baseRockwood),
+    "Age+Rockwood (Adj)", lhs %>% update(baseRockwood) %>% update(additional),
+    "QCovid2", lhs %>% update(baseQCovid),
+    "QCovid2 (Adj)", lhs %>% update(baseQCovid) %>% update(additional),
+  )
+  multivModels = imputed %>% run_models(multiConfig, robust_poisson)
+  
+  combinedModels = bind_rows(univModels,multivModels) %>% 
+    mutate(modelName = modelName %>% ordered(unique(c(univariateConfig$modelName,multiConfig$modelName))))
+           
+  combinedTable = combinedModels %>% 
+    summarise_boots(allVars, statistic = "RR") 
+
+  combinedTable  %>% hux_auto_widths() %>% sup$add_table(
+    caption=glue::glue(captions$table4),
+    footnote = footnotes$table4,
+    index=index)
+  
+  perf = multivModels %>% 
+    mutate(modelName = modelName %>% ordered(unique(multiConfig$modelName))) %>% 
+    analyse_performance() 
+  
+  perf  %>% hux_auto_widths() %>% 
+    sup$add_table(
+      caption=glue::glue(captions$table5), 
+      footnote = footnotes$table5,
+      index=index+1)
+  
+  return(list(
+    models = combinedModels,
+    table = combinedTable,
+    performance = perf
+  ))
+  
+}
+
+tmp1 = run_regressions("day_7.max_o2_gt_28", robust_poisson, outcome = "of maximal oxygen requirements in the first 7 days exceeding 28%", index=6)
+tmp2 = run_regressions("day_7.WHO_score_gt_5", robust_poisson, outcome = "of WHO Outcome score larger than 5 in the first 7 days", index=8)
+tmp3 = run_regressions("day_7.los_gt_3", robust_poisson, outcome = "of length of hospital stay exceeding 3 days", index=10)
+```
+
+# Combined regression models
+
+* For all outcomes:
+* TODO: this has changed and I haven't updated documentation yet
++ Multivariate models: outcome versus forward selection of individual features + genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
++ Cross models: outcome versus forward selection of individual features + genomic.variant_inferred * vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
+
+
+```{r S12_combined_logistic_regression_models}
+
+multiConfig = tibble::tribble(
+  ~modelName, ~form,
+  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+  "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(baseCCIcat),
+  "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(baseCCIcat),
+)
+
+predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
+
+# multivModels = imputed %>% run_models(multiConfig,logistic_regression)
+# multivModels = imputed %>% run_models(multiConfig,robust_poisson_2) # anova works but not performance metrics uses geepack and emmeans
+multivModels = imputed %>% run_models(multiConfig,robust_poisson) # anova does not work properly
+# multivModels = imputed %>% run_models(multiConfig,log_binomial)
+# multivModels = imputed %>% run_models(multiConfig,log_binomial_2) # logbin does not work for some reason. It does not produce a valid summary() output and has NaN for all SE.
+# multivModels = imputed %>% run_models(multiConfig,quasi_poisson)
+
+# Put univariate and multivariate in same table
+# this is table 2?
+h2 = multivModels %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  summarise_boots(predictors,"RR")
+
+h2 %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Robust poisson regression model relative risks for the three indicators of hospital burden. Relative risks describe the effect of different predictors on whether patients require oxygen supplementation with FiO2 >28% (first column), have a WHO Outcome score larger than 5 (second column) or are hospitalised for more than 3 days in hospital (third column) assessed on the seventh day after admission.", 
+    footnote = footnotes$table4,
+    index=12)
+
+# h2 %>% 
+#   hux_auto_widths() %>% 
+#   huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) %>% 
+#   hux_save_as(out("table2-combined-regression"))
+
+```
+
+* Comparative performance:
+
+```{r S13_combined_models_performance metrics}
+
+multivModels %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  analyse_performance(statistics = NULL) %>% 
+  sup$add_table(
+    caption="The performance of parsimonious robust poisson regression models for the comparison of the three binary outcomes of maximal FiO2>28%, any ICU admission and length of stay >3 days assessed at day 7 of admission. The Akiake information criterion, AIC, and Baeysian information criteria, BIC, describe the information lost by the model and lower numbers are better. Tjur's R2 coefficient of determination is a psuedo R^2 meausure where higher numbers are better. RMSE is root mean squared error and Sigma is the residual standard deviation, a measure of the remaining unexpained variation in the data.",
+    footnote = footnotes$table5,
+    index=13)
+
+```
+
+
+* Summary graphical output
+
+
+```{r F4_logistic_regression_forest_plot}
+
+multivModels2 = imputed %>% run_models(multiConfig,robust_poisson_2)
+multivModels = imputed %>% run_models(multiConfig,robust_poisson) # anova does not work properly
+
+predictors2 = c("genomic.variant_inferred","vaccination.vaccination","demog.age_category","admission.cci_category")
+
+# TODO: look at making this re-useable
+#forest = multivModels %>% forestplot_boots(predictors)
+out1 = multivModels2 %>% mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% combine_boots(predictors2)
+# out1 = multivModels %>% mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% combine_boots(predictors2)
+perf = multivModels %>% mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% pool_performance(statistics = c("AIC","BIC","R2_Tjur","R2_Nagelkerke","RMSE","Sigma"))
+
+out2 = out1 %>% 
+  group_by(group) %>%
+  mutate(g = cur_group_id() %% 2) %>%
+  group_by(group,subgroup) %>% mutate(
+    y=cur_group_id(),
+    x=exp(unname(beta.median)), 
+    xmin=exp(unname(beta.lower)), 
+    xmax=exp(unname(beta.upper))
+  ) %>% ungroup() %>% mutate(
+    y = max(y)-y,
+  )
+
+statistic_label = "relative risk"
+# statistic_label = "Odds ratio"
+
+groups = out2 %>% select(modelName,group,g,y,x,xmin,xmax,statistic,p.value,p.component,type) %>% mutate(
+    y=y+0.1, 
+    label=as.character(group), 
+    label_x=0,
+    x=ifelse(type=="continuous", x, NA_real_),
+    xmin=ifelse(type=="continuous", xmin, NA_real_),
+    xmax=ifelse(type=="continuous", xmax, NA_real_),
+  ) %>% group_by(modelName,group) %>% filter(y==max(y)) %>% ungroup()
+subgroups = out2 %>% select(modelName,subgroup,g,y,x,xmin,xmax,statistic,p.value,p.component) %>% filter(!is.na(subgroup)) %>% mutate(label=as.character(subgroup), label_x=1)
+longer = bind_rows(groups, subgroups) %>% mutate(y=as.factor(dense_rank(y))) %>%
+  mutate(p.flag = case_when(
+    p.component %>% stringr::str_starts("<") ~ "\u2020\u2020\u2020",
+    as.numeric(p.component) < 0.01 ~ "\u2020\u2020",
+    as.numeric(p.component) < 0.05 ~ "\u2020",
+    TRUE ~ "ns"
+  ))
+
+p1 = ggplot(longer, aes(y=y, x=x,xmin=xmin,xmax=xmax,colour=modelName))+
+  geom_tile(mapping=aes(fill=as.character(g),x=1),width=Inf,colour=NA)+
+  geom_point(position=ggstance::position_dodgev(height=0.5,preserve = "total"),size=0.4)+
+  geom_errorbarh(position=ggstance::position_dodgev(height=0.5,preserve = "total"),height=0.4)+ 
+  scale_x_log10(breaks = c(0.25,0.5,1,2,4)) +
+  coord_cartesian(xlim=c(0.25,4))+
+  geom_vline(xintercept = 1)+
+  geom_text(data = longer %>% filter(!is.na(p.component)), mapping=aes(y=y,x=0.25,label=p.flag),inherit.aes = FALSE,size=gg_label_size(5),hjust=0,colour="black")+
+  geom_text(data = longer %>% select(y,modelName,subgroup,label,statistic) %>% distinct(), mapping=aes(y=y,x=1.05,label=ifelse(!is.na(subgroup) & statistic=="ref","ref",NA)),inherit.aes = FALSE,size=gg_label_size(5),hjust=0,colour="black")+
+  geom_point(data = longer %>% select(y,modelName,subgroup,label,statistic) %>% filter(!is.na(subgroup) & statistic=="ref") %>% distinct(), mapping=aes(y=y,x=1),inherit.aes = FALSE,colour="black")+
+  gg_hide_Y_axis()+
+  xlab(statistic_label)+
+  scale_fill_manual(values = c("0"="grey90","1"="white"), guide="none")+
+  scale_color_brewer(palette = "Dark2")+
+  facet_wrap(vars(modelName))+
+  gg_hide_legend()+
+  gg_set_X_angle(0)+
+  labs(caption="\u2020\u2020\u2020 indicates p-value < 0.001, \u2020\u2020 p-value < 0.01 and \u2020 p-value < 0.05. 'ns' have p-value \u2265 0.05")
+  
+if (longer %>% filter(label==as.character(group) & !is.na(p.value)) %>% nrow() > 0)
+  p1 = p1+geom_text(data = longer %>% filter(label==as.character(group) & !is.na(p.value)) %>% mutate(label=paste0("(p: ",p.value,")")), mapping=aes(y=y,x=4,label=label),inherit.aes = FALSE,size=gg_label_size(5),hjust=1,colour="black")
+
+p2 = ggplot(longer %>% select(y,g,label_x,label) %>% distinct(),aes(y=y))+
+  geom_tile(mapping=aes(fill=as.character(g),x=1),width=Inf,colour=NA)+
+  geom_text(mapping=aes(x=label_x, hjust=label_x, label=label),size=gg_label_size(6))+coord_cartesian(xlim=c(0,1))+theme_void()+scale_fill_manual(values = c("0"="grey90","1"="white"), guide="none")
+
+perf2 = perf %>% group_by(statistic) %>% mutate(y=cur_group_id(),g = cur_group_id() %% 2) %>% ungroup() %>% mutate(y=max(y)-y)
+
+
+p3 = ggplot(perf2 %>% select(statistic,y,g) %>% distinct(), aes(y=y,label=statistic,x=1))+
+  geom_tile(mapping=aes(fill=as.character(g)),width=Inf,colour=NA)+
+  scale_fill_manual(values = c("0"="grey90","1"="white"), guide="none")+
+  geom_text(size=gg_label_size(6), hjust=1)+theme_void()+
+  coord_cartesian(xlim = c(0,1))
+
+p4 = ggplot(perf2, aes(y=y,label=value,x=0))+
+  geom_tile(mapping=aes(fill=as.character(g),x=0),width=Inf,colour=NA)+
+  geom_text(size=gg_label_size(6))+
+  scale_fill_manual(values = c("0"="grey90","1"="white"), guide="none")+
+  facet_wrap(vars(modelName))+gg_hide_X_axis()+gg_hide_Y_axis()+theme(axis.ticks.x = element_blank(), panel.grid = element_blank(), strip.text = element_blank(), strip.background = element_blank())
+
+p = p2+p1+patchwork::plot_layout(ncol=2,nrow=1,widths = c(2.5,10))
+
+p %>% gg_save_as(out("fig4-forest-plot"), size = std_size$third)
+
+p = p2+p1+p3+p4+patchwork::plot_layout(ncol=2,nrow=2,widths = c(2.5,10),heights = c(10,3))
+
+p %>% gg_save_as(out("fig4-forest-plot-with-gof"), size = std_size$half)
+
+```
+
+# Combined regression models with interactions
+
+* For all outcomes:
+* Stepwise parsimonious models, using AIC increase at a level where p<0.05 that model has improved at each additional step:
++ Cross models: outcome versus forward selection of individual features + genomic.variant_inferred * vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
+
+```{r S14_combined_cross_logistic_regression_models}
+
+multiConfig = tibble::tribble(
+  ~modelName, ~form,
+  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(crossCCIcat),
+  "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(crossCCIcat),
+  "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(crossCCIcat),
+)
+
+
+predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
+
+
+multivModels = imputed %>% run_models(multiConfig, robust_poisson)
+
+# Put univariate and multivariate in same table
+# this is table 2?
+h2 = multivModels %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  summarise_boots(predictors,"RR")
+
+h2 %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Robust poisson regression model relative risks for the three indicators of hospital burden, involving an interaction term between variant and vaccination. Relative risks describe the effect of different predictors on whether patients require oxygen supplementation with FiO2 >28% (first column), spend any time in ICU admission (second column) or are hospitalised for more than 3 days in hospital (third column) assessed on the seventh day after admission.", 
+    footnote = footnotes$table4,
+    index=14)
+
+# h2 %>% 
+#   hux_auto_widths() %>% 
+#   huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) %>% 
+#   hux_save_as(out("table2-combined-regression"))
+
+```
+
+# Sensitivity analysis LOS
+
+* For all outcomes:
+* Stepwise parsimonious models, using AIC increase at a level where p<0.05 that model has improved at each additional step:
++ Multivariate models: outcome versus forward selection of individual features + genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
++ Cross models: outcome versus forward selection of individual features + genomic.variant_inferred * vaccination.vaccination + demog.age_category + admission.charlson_comorbidity_index
+
+```{r S15_sensitivity_O2}
+
+multiConfig = tibble::tribble(
+  ~modelName, ~form,
+  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+  "Max FiO\u2082>35%", (day_7.max_o2_gt_35 ~ .) %>% update(baseCCIcat),
+  "Max FiO\u2082>50%", (day_7.max_o2_gt_50 ~ .) %>% update(baseCCIcat),
+)
+
+predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
+multivModels = imputed %>% run_models(multiConfig, robust_poisson)
+
+h2 = multivModels %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","Max FiO\u2082>35%","Max FiO\u2082>50%"))) %>% 
+  summarise_boots(predictors,"RR")
+
+h2 %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Sensitivity analysis including robust poisson regression model relative risks for maximum oxygen requirement. Relative risks describe the effect of different predictors of maximum oxygen requirements >28% FiO2 (first column), maximum oxygen requirements >35% FiO2  (second column), or maximum oxygen requirements >50% FiO2  (third column) assessed on the seventh day after admission.", 
+    footnote = footnotes$table4,
+    index=15)
+
+
+
+```
+
+```{r S16_sensitivity_WHO_outcome}
+
+multiConfig = tibble::tribble(
+  ~modelName, ~form,
+  "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(baseCCIcat),
+  "WHO Outcome score>6", (day_7.WHO_score_gt_6 ~ .) %>% update(baseCCIcat),
+)
+
+predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
+
+multivModels = imputed %>% run_models(multiConfig, robust_poisson)
+
+h2 = multivModels %>% 
+  mutate(modelName = modelName %>% ordered(c("WHO Outcome score>5","WHO Outcome score>6"))) %>% 
+  summarise_boots(predictors,"RR")
+
+h2 %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Sensitivity analysis including robust poisson regression model relative risks for WHO Outcome score. relative riskss describe the relative effect of different predictors on whether patients with a WHO Outcome score > 5 (first column), and a WHO Outcome score > 6 (second column), assessed on the seventh day after admission.", 
+    footnote = footnotes$table4,
+    index=16)
+
+
+```
+
+```{r S17_sensitivity_LOS}
+
+multiConfig = tibble::tribble(
+  ~modelName, ~form,
+  "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(baseCCIcat),
+  "LOS>5 days", (day_7.los_gt_5 ~ .) %>% update(baseCCIcat),
+  "LOS>7 days", (day_7.los_gt_7 ~ .) %>% update(baseCCIcat),
+)
+
+predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
+
+multivModels = imputed %>% run_models(multiConfig, robust_poisson)
+
+h2 = multivModels %>% 
+  mutate(modelName = modelName %>% ordered(c("LOS>3 days","LOS>5 days","LOS>7 days"))) %>% 
+  summarise_boots(predictors,"RR")
+
+h2 %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Sensitivity analysis including robust poisson model relative risks for length of stay. Relative risks describe the effect of different predictors on whether patients are hospitalised for more than 3 days (first column), whether patients are hospitalised for more than 5 days (second column), or whether patients are hospitalised for more than 7 days (third column) assessed on the seventh day after admission.", 
+    footnote = footnotes$table4,
+    index=17)
+
+
+```
+
+
+
+Odds ratios are not good effect measures when the outcome of interest is common. Odds are close to risks when the outcome is rare, but exaggerated (odds >> risk) when the outcome is common. Thus, odds ratio tends to give false impression of large effect when the outcome is common.
+
+In the example below the odds ratio is much larger than the relative risks when the outcome is common.
+
+Rare outcome
+0.035/0.03 = 1.167 (RR)
+(0.035/(1-0.035))/(0.03/(1-0.03)) = 1.173 (OR)
+
+Common outcome
+0.97/0.9 = 1.078 (RR)
+(0.97/(1-0.97))/(0.9/(1-0.9)) = 3.593 (OR)
+
+https://clas.ucdenver.edu/marcelo-perraillon/sites/default/files/attached-files/perraillon_marginal_effects_lecture_lisbon_0.pdf
+https://cran.r-project.org/web/packages/MatchIt/vignettes/estimating-effects.html
+
+Comparing performance between log-binomial and robust Poisson regression models for estimating relative riskss under model misspecification
+https://bmcmedresmethodol.biomedcentral.com/articles/10.1186/s12874-018-0519-5
+
+
+```{r S18_sensisitivty_method}
+
+multiConfig = tibble::tribble(
+  ~modelName, ~form,
+  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+  "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(baseCCIcat),
+  "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(baseCCIcat),
+)
+
+predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
+
+multivModelsOR = imputed %>% run_models(multiConfig,logistic_regression)
+# multivModels = imputed %>% run_models(multiConfig,robust_poisson_2) # anova works but not performance metrics uses geepack and emmeans
+multivModelsRR1 = imputed %>% run_models(multiConfig,log_binomial)
+multivModelsRR2 = imputed %>% run_models(multiConfig,robust_poisson) # anova does not work properly
+# multivModels = imputed %>% run_models(multiConfig,log_binomial_2) # logbin does not work for some reason. It does not produce a valid summary() output and has NaN for all SE.
+multivModelsRR3 = imputed %>% run_models(multiConfig,quasi_poisson)
+
+fullSensitivity = tibble(
+  method = c("Logistic","Log-binomial","Robust Poisson","Quasi-poisson"),
+  estimateType = c("OR","RR","RR","RR"),
+  boots = list(multivModelsOR,multivModelsRR1,multivModelsRR2,multivModelsRR3)
+)
+
+fullSensitivity = fullSensitivity %>% mutate(combined = purrr::map2(boots, estimateType, ~ combine_boots(.x,predictors) ))
+h2 = fullSensitivity %>% select(-boots) %>% 
+  unnest(combined) %>% 
+  select(c(-starts_with("beta"),-type,-p.value)) %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  rename(Characteristic = group, Group = subgroup, `Estimate Type`=estimateType, estimate = statistic, `P-value` = p.component) %>%
+  hux_tidy(rowGroupVars = vars(Characteristic,Group,`Estimate Type`,method),colGroupVars = vars(modelName))
+
+h2 %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Regression model relative risks and odds ratios for the three indicators of hospital burden calculated using different methods. Odds ratios are calculated with logistic regression, relative risks using log-binomial, quasi-poisson, and robust poisson methods for each of the 3 outcomes. There is close agreement between the relative risk estimates using any method. The odds ratios are generally of larger magnitude (i.e. further from 1) than the relative risks, and naive interpretation of the odds ration will overstate the impact of both variant and vaccination, due to the violation of the assumption that the outcomes are rare events, inherent in logistic regression.", 
+    footnote = footnotes$table4,
+    index=18)
+
+
+```
+
+```{r S18_sensisitivty_age}
+
+# multiConfig = tibble::tribble(
+#   ~modelName, ~form,
+#   "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+#   "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(baseCCIcat),
+#   "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(baseCCIcat),
+# )
+# 
+# predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
+# 
+# multivModels = imputed %>% run_models(multiConfig,robust_poisson, demog.age_category %in% c(v$demog.age_category$`75-84`,v$demog.age_category$`85+`)) # anova does not work properly
+# 
+# # Put univariate and multivariate in same table
+# # this is table 2?
+# h2 = multivModels %>% 
+#   mutate(modelName = modelName %>% ordered(c("LOS>3 days","LOS>5 days","LOS>7 days"))) %>% 
+#   summarise_boots(predictors,"RR")
+# 
+# h2 %>% 
+#   hux_auto_widths() 
+# # %>% 
+# #   sup$add_table(
+# #     caption="Sensitivity analysis including robust poisson model relative risks for length of stay. Relative risks describe the effect of different predictors on whether patients are hospitalised for more than 3 days (first column), whether patients are hospitalised for more than 5 days (second column), or whether patients are hospitalised for more than 7 days (third column) assessed on the seventh day after admission.", 
+# #     footnote = footnotes$table4,
+# #     index=17)
+
+```
+
+
+```{r write_supplementary_materials}
+sup$write()
+```
+

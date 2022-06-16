@@ -1,0 +1,4 @@
+event,start_date,end_date
+lockdown 1,2020-03-23,2020-07-04
+lockdown 2,2020-11-05,2020-12-02
+lockdown 3,2021-01-06,2021-04-12

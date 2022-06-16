@@ -1,0 +1,798 @@
+---
+title: "LRTD incidence"
+author: "Rob Challen"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+here::i_am("lrtd-incidence/lrtd-incidence.Rmd")
+source(here::here("common-setup.R"))
+
+out = outputter(directory=here::here("output/lrtd-incidence"), datedFile = FALSE,datedSubdirectory = TRUE)
+sup = data_supplement(out = out)
+
+options(reproduce.at="2022-03-22")
+options(hide.supplementary.tables=TRUE)
+
+options(dtrackr.strata_glue="{.value}")
+options(dtrackr.strata_sep=", ")
+options(dtrackr.default_message="{.count} admissions")
+options(dtrackr.show_zero_exclusions=FALSE)
+
+# In statistical comparisons the published version uses KS tests for all a parametric comparisons.
+# however these are limited by the presence of many ties in some of the outcome variables and CCI.
+# a better choice would have been a wilcoxon-mann-whitney and the following option enables that.
+# at the moment though this is disabled to allow reproducibility of the submitted study findings.
+options(use.wilcoxon=FALSE)
+
+source(here::here("lrtd-incidence/lrtd-incidence-data.R"))
+
+# TODO: automate data into google docs
+# devtools::load_all("~/Git/roogledocs/")
+# J = roogledocs::JavaApi$new()
+# rd = J$RoogleDocs$new()
+# rd$findOrCreateDocument("lrtd-incidence")
+# rd$tagsDefined()
+
+```
+
+## Load data
+
+```{r data}
+
+lrtd_data  = load_data("AvonCAPLRTDCentralDa")
+lrtd_norm = lrtd_normalise(lrtd_data)
+tmp2 = lrtd_norm %>% lrtd_study_data(study_end = "2021-11-15")
+v = tmp2 %>% get_value_sets()
+
+start_week = min(tmp2$admission.study_week,na.rm = TRUE)
+end_week = study_week(as.Date("2021-11-15"))
+
+tmp2 %>% excluded() %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
+tmp2 %>% flowchart(filename = out("supp-fig1-flowchart"))
+
+tmp2 = tmp2 %>% untrack()
+
+write(x = attr(lrtd_data,"file"), file = out("data_sources.txt"))
+```
+
+# Upset plot
+
+
+```{r}
+lancet_pvalue = function(p) {
+  ifelse(p<0.0001,"<0.0001",sprintf("%1.2g",p))
+}
+# TODO: work out if I could make this into a generic plotting function. 
+# upset diagram have not been stratified in this way before.
+
+utmp = tmp2 %>% ungroup() %>% untrack() %>% # filter(admission.infective_cause == v$admission.infective_cause$Infective) %>% 
+  group_by(admission.category) %>% mutate(denom = n()) %>% ungroup() %>%
+  mutate(
+    Pneumonia = diagnosis.pneumonia == v$diagnosis.pneumonia$yes,
+    "NP-LRTI" = diagnosis.LRTI == v$diagnosis.LRTI$yes,
+    HF = diagnosis.heart_failure == v$diagnosis.heart_failure$yes,
+    CRDE = diagnosis.exacerbation_of_chronic_respiratory_disease == v$diagnosis.exacerbation_of_chronic_respiratory_disease$yes
+  ) %>%
+  mutate(across(.cols = c(Pneumonia,`NP-LRTI`,HF,CRDE),.fns = function(.x) ifelse(.x,cur_column(),NA_character_), .names=".u.{.col}")) %>% 
+  tidyr::unite(col = "intersection", starts_with(".u."), sep="/", na.rm=TRUE) %>% 
+  # mutate(intersection = ifelse(intersection=="","<none>",intersection)) %>%
+  filter(intersection != "") %>%
+  mutate(intersection = intersection %>% stringr::str_replace_all(fixed("Pneumonia/"),"Pn./")) %>%
+  mutate(intersection= forcats::fct_infreq(factor(intersection),ordered = TRUE))
+  
+
+utmp2 = utmp %>%
+  mutate(.id = row_number()) %>%
+  mutate(across(.cols = c(Pneumonia,`NP-LRTI`,HF,CRDE),.fns = function(.x) ifelse(.x,cur_column(),NA_character_), .names=".u.{.col}")) %>% 
+  pivot_longer(cols = starts_with(".u."),names_to="name", values_to = "primary") %>%
+  filter(!is.na(primary)) %>% select(-name) %>% 
+  mutate(primary= forcats::fct_rev(forcats::fct_infreq(factor(primary),ordered = TRUE)))
+
+# utmp %>% group_by(intersection,admission.is_covid) %>% rstatix::shapiro_test(demog.age)
+
+ageTable = utmp %>% group_by(`Age`=intersection) %>% group_modify(function(d,g,...) {
+  if(length(unique(d$admission.is_covid))==2 ) {
+    ## Reviewer 1 comment did we check normal assumption on the comparisons
+    
+    # tt = t.test(demog.age~admission.is_covid,d)
+    # effect_size = sprintf("%1.3g", abs(tt$estimate[[1]]-tt$estimate[[2]]))
+    # pvalue = lancet_pvalue(tt$p.value)
+    
+    effect_size = d %>% group_by(admission.is_covid) %>% summarise(mean = mean(demog.age,na.rm = TRUE)) %>% pull(mean) %>% diff() %>% sprintf(fmt="%1.3g")
+    pvalue = d %>% tidy_ks(demog.age~admission.is_covid) %>% pull(p) %>% lancet_pvalue()
+    
+  } else {
+    effect_size = "\u2014"
+    pvalue = "\u2014"
+  }
+  return (tibble("Change" = effect_size, `P-value`=pvalue))
+}) %>% gg_simple_table(pts = 5)
+
+# utmp %>% group_by(intersection,admission.is_covid) %>% rstatix::shapiro_test(admission.charlson_comorbidity_index)
+
+cciTable = utmp %>% group_by(`CCI`=intersection) %>% group_modify(function(d,g,...) {
+  if(length(unique(d$admission.is_covid))==2 ) {
+    
+    effect_size = d %>% group_by(admission.is_covid) %>% summarise(mean = mean(admission.charlson_comorbidity_index,na.rm = TRUE)) %>% pull(mean) %>% diff() %>%  sprintf(fmt="%1.3g")
+    
+    if (getOption("use.wilcoxon",TRUE)) {
+      # see note above
+      pvalue = d %>% tidy_wilcoxon(admission.charlson_comorbidity_index~admission.is_covid) %>% pull(p) %>% lancet_pvalue()
+    } else {
+      pvalue = d %>% tidy_ks(admission.charlson_comorbidity_index~admission.is_covid) %>% pull(p) %>% lancet_pvalue()
+    }
+    
+  } else {
+    effect_size = "\u2014"
+    pvalue = "\u2014"
+  }
+  return (tibble("Change" = effect_size, `P-value`=pvalue))
+  
+}) %>% gg_simple_table(pts = 5)
+
+p1 = utmp %>% group_by(admission.category,intersection) %>% summarise(n=n()) %>% mutate(binom::binom.confint(n , sum(n), methods = "wilson")) %>% ungroup() %>% tidyr::complete(intersection,admission.category, fill=list(x=0,mean=0))
+
+# which of these is right?
+p2 = utmp2 %>% group_by(admission.category,primary,denom) %>% summarise(n=n())  %>% mutate(binom::binom.confint(n , denom, methods = "wilson")) %>% ungroup() %>%tidyr::complete(admission.category,primary,fill=list(x=0,mean=0))
+
+# p2 = utmp2 %>% group_by(admission.category,primary) %>% summarise(n=n())  %>% mutate(binom::binom.confint(n , sum(n), methods = "wilson")) %>% ungroup() %>%tidyr::complete(admission.category,primary,fill=list(x=0,mean=0))
+
+m = utmp2 %>% select(primary,intersection) %>% distinct()
+m_line = m %>% group_by(intersection) %>% summarise(start = min(primary), end = max(primary))
+
+total_plot = ggplot(utmp %>% ungroup() %>% select(admission.category,denom) %>% distinct(), aes(y=as.factor(1),x=as.factor(1),label=denom,colour=admission.category))+geom_text(position = ggstance::position_dodgev(height=0.7),size=gg_label_size(5))+guides(colour=guide_none())+scale_y_discrete(breaks=NULL)+gg_hide_Y_axis()+scale_color_brewer(palette="Dark2")
+
+nplot = ggplot(p2, aes(y=primary,x=as.factor(1),label=x,colour= admission.category))+geom_text(position = ggstance::position_dodgev(height=0.7),size=gg_label_size(5))+guides(colour=guide_none())+scale_x_discrete(breaks=NULL)+gg_hide_X_axis()+scale_color_brewer(palette="Dark2")
+
+nplot2 = ggplot(p1, aes(x=intersection,y=as.factor(1),label=x,colour= admission.category))+geom_text(position = position_dodge(width=0.7),size=gg_label_size(5),angle=90)+guides(colour=guide_none())+scale_y_discrete(breaks=NULL)+gg_hide_Y_axis()+scale_color_brewer(palette="Dark2")
+
+mplot = ggplot()+geom_point(data=m, mapping=aes(x=intersection, y=primary), size=2)+geom_segment(data=m_line, mapping=aes(x=intersection, y=start,xend=intersection, yend=end), size=0.5)+xlab(NULL)+ylab(NULL)+
+  theme(axis.text.y = element_text(angle=30,hjust = 1,vjust = 0))+scale_x_discrete(position = "top")
+
+bplot = 
+  ggplot(p2, aes(y=primary,fill = admission.category))+geom_bar(aes(x=mean*100), stat="identity", colour="black", position=ggstance::position_dodgev(height=0.9), width = 0.8)+
+  #geom_errorbarh(aes(xmin=lower*100,xmax=upper*100), position=ggstance::position_dodgev(height=0.7), height = 0.4)+
+  xlab(NULL)+scale_x_continuous(labels = function(x) sprintf("%1.0f%%",x), position="top")+scale_fill_brewer(palette="Dark2",name=NULL)
+
+b2plot = 
+  ggplot(p1, aes(x=intersection,fill = admission.category))+geom_bar(aes(y=mean*100), stat="identity", colour="black", position=position_dodge(width=0.9), width = 0.8)+
+  #geom_errorbar(aes(ymin=lower*100,ymax=upper*100), colour="black", position=position_dodge(width=0.7), width = 0.4)+
+  ylab("proportion")+scale_y_continuous(labels = function(x) sprintf("%1.0f%%",x))+scale_fill_brewer(palette="Dark2",aesthetics = c("fill","colour"),name=NULL)
+
+agePlot = ggplot(utmp %>% ungroup() %>% select(intersection,admission.category,demog.age) %>% tidyr::complete(intersection,admission.category, fill=list(demog.age=-100)), aes(x=intersection, fill=admission.category, y=demog.age))+
+  # geom_violin(draw_quantiles = c(0.5,0.25,0.75),position=position_dodge(width=0.7), width = 0.6)+
+  geom_boxplot(position=position_dodge2(width=0.9,preserve = "single"), width = 0.8, notch = TRUE, outlier.size = 0.25)+
+  scale_fill_brewer(palette="Dark2",name=NULL)+ylab("age")+guides(fill=guide_none()) + 
+  coord_cartesian(ylim = c(0,NA))+ 
+  scale_x_discrete(drop=FALSE)
+
+cciPlot = ggplot(
+  utmp %>% ungroup() %>% select(intersection,admission.category,admission.charlson_comorbidity_index) %>% tidyr::complete(intersection,admission.category, fill=list(admission.charlson_comorbidity_index=-100)), aes(x=intersection, fill=admission.category, y=admission.charlson_comorbidity_index))+
+  geom_boxplot(position=position_dodge2(width=0.7,preserve = "single"), width = 0.6, notch = TRUE, outlier.size = 0.25)+
+  scale_fill_brewer(palette="Dark2",name=NULL)+ylab("CCI")+guides(fill=guide_none())+
+  coord_cartesian(ylim = c(0,NA))+ 
+  scale_x_discrete(drop=FALSE)
+
+layout = "
+AAAAAAAAAAIBBB
+AAAAAAAAAAIBBB
+AAAAAAAAAAIBBB
+AAAAAAAAAAIBBB
+AAAAAAAAAAIBBB
+AAAAAAAAAAIBBB
+HHHHHHHHHHJJJJ
+CCCCCCCCCCJJJJ
+CCCCCCCCCCJJJJ
+CCCCCCCCCCEEEE
+CCCCCCCCCCEEEE
+CCCCCCCCCCEEEE
+CCCCCCCCCCEEEE
+DDDDDDDDDDEEEE
+DDDDDDDDDDEEEE
+DDDDDDDDDDEEEE
+DDDDDDDDDDEEEE
+DDDDDDDDDDGGGG
+DDDDDDDDDDGGGG
+FFFFFFFFFFGGGG
+FFFFFFFFFFGGGG
+FFFFFFFFFFGGGG
+FFFFFFFFFFGGGG
+FFFFFFFFFFGGGG
+FFFFFFFFFFGGGG
+"
+
+p = 
+  mplot+theme(axis.text.x.top = element_text(angle=330,vjust = 0,hjust=1))+theme(axis.text.y = element_text(angle=330, hjust=1, vjust=1))+ #A
+  bplot+gg_hide_Y_axis()+theme(axis.text.x.top = element_text(angle=0,vjust = 0,hjust=0.5)) + #B
+  b2plot+gg_hide_X_axis()+ #C
+
+  agePlot+gg_hide_X_axis()+ #D
+  ageTable+ #E
+  
+  cciPlot+gg_hide_X_axis()+ #E
+  
+  
+  
+  cciTable+ #G
+  (nplot2+gg_hide_X_axis()+ plot_layout(tag_level = 'new')) + #H
+  (nplot+gg_hide_Y_axis()+ plot_layout(tag_level = 'new'))+ #I
+  patchwork::guide_area()+ # J
+  # (total_plot+gg_hide_Y_axis()+gg_hide_X_axis()+ plot_layout(tag_level = 'new'))+ #K
+  
+  
+  # patchwork::plot_spacer()+ # K
+  patchwork::plot_layout(guides = "collect",design = layout)+
+  patchwork::plot_annotation(tag_levels = "A") &
+    theme(plot.tag = element_text(size = 8),
+          plot.tag.position = c(0, 1))
+
+gg_save_as(p, out("fig1-upset-diagram"),size = std_size$two_third)
+
+```
+
+## Timeseries
+
+```{r F3}
+# englandCases = readr::read_csv("https://api.coronavirus.data.gov.uk/v2/data?areaType=nation&areaCode=E92000001&metric=newCasesBySpecimenDate&format=csv") 
+bristolCases = readr::read_csv("https://api.coronavirus.data.gov.uk/v2/data?areaType=utla&areaCode=E06000023&metric=newCasesBySpecimenDate&format=csv")
+
+cases = bristolCases %>% 
+  # filter(!(age %in% c("00_59","60+"))) %>% 
+  #mutate(minAge = as.integer(stringr::str_sub(age, 1,2))) %>% 
+  filter(date<start_date_of_week(end_week) & date >= start_date_of_week(start_week+1)) %>% 
+  mutate(admission.study_week = study_week(date)) %>% 
+  group_by(admission.study_week) %>% 
+  summarise(weekly_cases = sum(newCasesBySpecimenDate)) %>%
+  mutate(admission.category=factor("Confirmed SARS-CoV-2",levels = levels(tmp2$admission.category)))
+
+# expects study_week and value columns
+# TODO: move this to estimators / ggrowth
+estimateWeeklyRate = function(studyWeekCounts,nn=0.2,deg=2) {
+  fit = locfit::locfit(value~locfit::lp(study_week,nn=nn,deg=deg),data = studyWeekCounts,family="qpoisson")
+  weeks = seq(min(studyWeekCounts$study_week),max(studyWeekCounts$study_week),by = 1/7)
+  tmp = preplot(fit,newdata=weeks,se.fit = TRUE,band="local")
+  tibble(
+    study_week = weeks,
+    date = start_date_of_week(weeks),
+    lower = exp(qnorm(0.05,tmp$fit,tmp$se.fit)),
+    median = exp(qnorm(0.5,tmp$fit,tmp$se.fit)),
+    upper = exp(qnorm(0.95,tmp$fit,tmp$se.fit))
+  )
+}
+
+#dates = seq(date_of(min(cases$admission.study_week)),date_of(max(cases$admission.study_week)),1)
+
+daily_cases = cases %>% group_by(admission.category) %>% group_modify(function(d,g,..) {
+  d %>% select(study_week = admission.study_week, value= weekly_cases) %>% estimateWeeklyRate(nn=0.1)
+})
+
+#Exclude partially complete weeks for purposes of graphs:
+tmp3 = tmp2 %>% filter(admission.study_week>=start_week+1 & admission.study_week<end_week)
+
+plotData =  tmp3 %>%
+  group_by(admission.study_week,admission.category, admission.presentation_3_class) %>% count() %>% 
+  ungroup() %>% 
+  tidyr::complete(admission.study_week,admission.category, admission.presentation_3_class,fill=list(n=0)) 
+# %>%
+#   left_join(cases, by="admission.study_week") %>%
+#   mutate(weekly_cases = ifelse(admission.is_covid!="SARS-CoV-2 PCR positive" | admission.presentation_3_class!="Pneumonia",NA,weekly_cases))
+
+lockdowns = readr::read_csv(here::here("reference-data/lockdown-events.csv")) %>% filter(start_date> start_date_of_week(start_week))
+
+fct = 20
+p1 = ggplot(plotData %>% mutate(x=start_date_of_week(admission.study_week)), aes(x=x, group=admission.presentation_3_class))+
+  geom_rect(data = lockdowns, mapping=aes(xmin=start_date,xmax=end_date,ymin=0,ymax=Inf),inherit.aes = FALSE, colour="grey95", alpha=0.1)+
+  geom_histogram(aes(y=n, fill=admission.presentation_3_class),stat="identity",binwidth = 7,colour="black",size=0.25)+scale_x_date(date_breaks = "4 weeks")+
+  ylab("admissions per week (N)")+
+  xlab(NULL)+
+  geom_line(data = daily_cases, aes(x=date,y=median/fct, colour="Bristol COVID cases"), inherit.aes = FALSE,size=0.5)+
+  geom_ribbon(data = daily_cases, aes(x=date,ymin=lower/fct, ymax=upper/fct, colour="Bristol COVID cases"), fill=NA, linetype="dotted", inherit.aes = FALSE,size=0.5)+
+  geom_point(data = cases, aes(x=start_date_of_week(admission.study_week),y=weekly_cases/fct, colour="Bristol COVID cases"), inherit.aes = FALSE,size=1)+
+  scale_y_continuous(sec.axis = sec_axis(~ . * fct,name = "cases per week (N)",labels = function(b) sprintf("%1.0f",b)))+
+  scale_fill_brewer(palette="YlGnBu",name="")+
+  scale_colour_brewer(palette="Set1",name="")+
+  facet_wrap(vars(admission.category),ncol=1)
+
+
+
+
+
+
+
+```
+
+```{r F4 }
+pop = readr::read_csv(here::here("reference-data/bristol-catchment.csv"))
+
+plotData2 = tmp3 %>% 
+  inner_join(pop, by=c("demog.age_category"="age_category")) %>%
+  filter(admission.study_week>=start_week+1 & admission.study_week<end_week) %>%
+  group_by(admission.study_week, admission.category, demog.age_category, population) %>% count() %>% 
+  ungroup() %>% 
+  tidyr::complete(admission.study_week, admission.category, nesting(demog.age_category, population),fill=list(n=0)) %>%
+  mutate(per100K = n/population*100000)
+
+# The range of cases per week for COVID and non COVID is in the main paper
+plotData2 %>% group_by(admission.category,admission.study_week) %>% 
+  summarise(n=sum(n), population = sum(population)) %>% 
+  summarise(
+    range = sprintf("%1.0f \u2014 %1.0f admissions per week", min(n,na.rm = TRUE), max(n,na.rm = TRUE)),
+    rangePer100K = sprintf("%1.1f \u2014 %1.1f admissions per 100,000 adults per week", min(n/population*100000,na.rm = TRUE), max(n/population*100000,na.rm = TRUE)),
+    medianIQRper100K = sprintf_list("median %1.1f [IQR %1.1f \u2014 %1.1f] admissions per 100,000 adults per week", quantile(n/population*100000,c(0.5,0.25,0.75),na.rm = TRUE))
+)
+
+if (sum(plotData2$n) != nrow(tmp3)) stop("inconsistent data")
+```
+
+```{r}
+dates = seq(
+  start_date_of_week(min(plotData2$admission.study_week)),
+  start_date_of_week(max(plotData2$admission.study_week)),
+  1)
+
+# Smooth poisson  model.
+plotData3 = plotData2 %>% group_by(admission.category, demog.age_category, population) %>%
+  group_modify(function(d,g,..) {
+    d %>% select(study_week = admission.study_week, value=n) %>% estimateWeeklyRate()
+  }) %>% mutate(
+    medianPer100K = median/population*100000,
+    lowerPer100K = lower/population*100000,
+    upperPer100K = upper/population*100000
+  )
+
+p2 = ggplot(plotData2, aes(x=start_date_of_week(admission.study_week), y=n, colour=admission.category))+
+  geom_rect(data = lockdowns, mapping=aes(xmin=start_date,xmax=end_date,ymin=0,ymax=Inf),inherit.aes = FALSE, alpha=0.1)+
+  geom_vline(data=pop %>% rename(demog.age_category=age_category),mapping=aes(xintercept = vacc_earliest))+
+  geom_vline(data=pop %>% rename(demog.age_category=age_category),mapping=aes(xintercept = vacc_latest),linetype="dashed")+
+  # geom_rect(data=pop %>% rename(demog.age_category=age_category),mapping=aes(xmin = vacc_earliest, xmax = vacc_latest+1, ymin=55,ymax=60), inherit.aes = FALSE, alpha=0.75)+
+  geom_ribbon(data = plotData3, aes(x=date,ymin=lower, ymax=upper, fill=admission.category), colour=NA, linetype="dotted", alpha=0.15, inherit.aes = FALSE,size=0.5)+
+  geom_line(data = plotData3, aes(x=date, y=median, colour=admission.category))+
+  geom_point(size=0.01)+
+  scale_x_date(date_breaks = "8 weeks",name=NULL)+
+  scale_color_brewer(palette = "Dark2",name=NULL,aesthetics = c("colour","fill"))+
+  facet_wrap(vars(demog.age_category),ncol=2)+
+  ylab("admissions per week (N)")+coord_cartesian(ylim = c(NA,60))
+
+p = p1+p2+patchwork::plot_layout(ncol=1, guides="collect")+patchwork::plot_annotation(tag_levels = "A") & theme(legend.box.just = "left")
+
+# gg_save_as(p, out("fig4-timeseries-by-age"),size = std_size$half)
+gg_save_as(p, out("fig2-cases-and-timeseries-by-age"),size = std_size$two_third)
+
+```
+
+
+
+
+## Tabular summaries
+
+```{r summary_vars}
+
+tableEntries = vars(
+  demog.age,
+  demog.age_category,
+  demog.age_eligible,
+  demog.gender,
+  demog.ethnicity,
+  demog.care_home_resident,
+  demog.smoker,
+  demog.pcr_positive_by_age,
+  vaccination.pneumovax,
+  vaccination.influenza_vaccination,
+  vaccination.covid_vaccination,
+  admission.frailty_score,
+  admission.charlson_comorbidity_index,
+  admission.pneumonia_severity_index_class,
+  admission.curb_65_severity_score,
+  comorbid.copd, 
+  comorbid.asthma, 
+  comorbid.bronchiectasis, 
+  comorbid.interstitial_lung_dx,
+  comorbid.cystic_fibrosis,
+  comorbid.ccf, 
+  comorbid.ihd, 
+  comorbid.hypertension, 
+  comorbid.af,
+  comorbid.other_heart_dx, 
+  admission.pneumococcal_risk_group,
+  comorbid.other_pneumococcal_risks,
+  admission.on_immunosuppression,
+  comorbid.immunodeficiency,
+  comorbid.transplant_recipient,
+  comorbid.diabetes_type, 
+  comorbid.ckd,
+  comorbid.dementia,
+  comorbid.cognitive_impairment,
+  comorbid.cva, 
+  comorbid.tia, 
+  comorbid.hemiplegia,
+  comorbid.neuro_other,
+  comorbid.paraplegia,
+  comorbid.solid_cancer_present, 
+  comorbid.leukaemia, 
+  comorbid.lymphoma
+  )
+
+
+
+tableEntriesShort = vars(
+  demog.age,
+  demog.age_category,
+  demog.age_eligible,
+  demog.gender,
+  demog.ethnicity,
+  demog.care_home_resident,
+  demog.smoker,
+  # demog.PCR_positive_by_age,
+  # vaccination.pneumovax,
+  # vaccination.influenza_vaccination,
+  vaccination.covid_vaccination,
+  # admission.frailty_score,
+  admission.charlson_comorbidity_index,
+  # admission.pneumonia_severity_index_class,
+  admission.curb_65_severity_score,
+  comorbid.copd, 
+  comorbid.asthma, 
+  comorbid.bronchiectasis, 
+  # comorbid.interstitial_lung_dx,
+  # comorbid.cystic_fibrosis,
+  # comorbid.ccf, 
+  comorbid.ihd, 
+  comorbid.hypertension, 
+  # comorbid.af,
+  # comorbid.other_heart_dx, 
+  # admission.pneumococcal_risk_group,
+  # comorbid.other_pneumococcal_risks,
+  admission.on_immunosuppression,
+  # comorbid.immunodeficiency,
+  # comorbid.transplant_recipient,
+  comorbid.diabetes_type, 
+  comorbid.ckd,
+  # comorbid.dementia,
+  # comorbid.cognitive_impairment,
+  # comorbid.cva, 
+  # comorbid.tia, 
+  # comorbid.hemiplegia,
+  # comorbid.neuro_other,
+  # comorbid.paraplegia,
+  # comorbid.solid_cancer_present, 
+  # comorbid.leukaemia, 
+  # comorbid.lymphoma
+  )
+
+
+
+```
+
+# Table 1
+
+```{r T1}
+trueOrNa = function(log, na=FALSE) {
+  return(ifelse(is.na(log),na,log))
+}
+
+tmp4 = tmp2 %>% intersecting_group_by(
+  TRUE ~ "All aLRTD",
+  admin.consent_withheld == v$admin.consent_withheld$no  ~ "All included aLRTD",
+  admin.consent_withheld == v$admin.consent_withheld$yes ~ "Undifferentiated aLRTD",
+  admission.infective_cause == v$admission.infective_cause$Infective ~ "Infective",
+  admission.infective_cause == v$admission.infective_cause$`Non-infective` ~ "Non-infective",
+  admission.category == v$admission.category$`Confirmed SARS-CoV-2` ~ "Confirmed SARS-CoV-2",
+  admission.category == v$admission.category$`No evidence SARS-CoV-2` ~ "No evidence SARS-CoV-2",
+  .colname = "primary"
+) %>% intersecting_group_by(
+  TRUE ~ "Total",
+  diagnosis.pneumonia == v$diagnosis.pneumonia$yes ~ "Pneumonia",
+  diagnosis.LRTI == v$diagnosis.LRTI$yes ~ "NP-LRTI",
+  diagnosis.heart_failure == v$diagnosis.heart_failure$yes ~ "HF",
+  diagnosis.exacerbation_of_chronic_respiratory_disease == v$diagnosis.exacerbation_of_chronic_respiratory_disease$yes ~ "CRDE",
+  .colname = "secondary"
+) %>% mutate(
+  primary = factor(primary, levels=c("All aLRTD","Undifferentiated aLRTD","All included aLRTD","Infective","Non-infective","Confirmed SARS-CoV-2","No evidence SARS-CoV-2")),
+  secondary = factor(secondary, levels=c("Total","Pneumonia","NP-LRTI","HF","CRDE"))
+)
+
+# tmp4 %>% group_by(primary,secondary) %>% count() %>% View()
+
+tmp4 %>% group_modify(function(d,g,...) d %>% describe_population(comparisonVars = tableEntries, na.rm = FALSE, CI=FALSE) ) %>%
+  ungroup() %>%
+  select(Characteristic = variable,Group = group, primary, secondary, N, value) %>%
+  hux_tidy(rowGroupVars = vars(Characteristic,Group),colGroupVars = vars(primary,secondary)) %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Detailed comparison between presenting features of patients presenting with acute lower resipratory tract disease (aLRTD) including pneumonia, non-pneumonic lower respiratory tract infection (NP-LRTI), heart failure (HF) and chronic respiratory tract disease exacerbation (CRDE). More than one of these presenting features may be present in any one patient (but pneumonia and LP-LRTI are disjoint). Undifferentiated aLRTD events include patients who were admitted with acute respiratory disease but for whom further details are not available due to withheld or withdrawn consent", 
+    index=1)
+
+
+tmp4 %>% filter(
+    (
+      primary %in% c("Confirmed SARS-CoV-2","No evidence SARS-CoV-2") & secondary %in% c("Pneumonia","NP-LRTI")
+    ) |
+    primary == "All included aLRTD" & secondary == "Total" |
+    primary == "Non-infective" & secondary == "Total"
+  ) %>% 
+  group_modify(function(d,g,...) d %>% describe_population(comparisonVars = tableEntriesShort, na.rm = FALSE, CI=FALSE) ) %>%
+  ungroup() %>%
+  select(Characteristic = variable,Group = group, primary, secondary, N, value) %>%
+  hux_tidy(rowGroupVars = vars(Characteristic,Group),colGroupVars = vars(primary,secondary)) %>%
+  hux_set_font(defaultFontSize = 6) %>%
+  hux_auto_widths() %>%
+  huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) %>% 
+  hux_save_as(filename = out("table1"),formats = c("docx","html","png","pdf"),size = ggrrr::std_size$landscape)
+```
+
+## Table 2
+
+```{r T2}
+tmp5 = tmp4 %>% filter(!primary %in% c("All aLRTD","Undifferentiated aLRTD"))
+t1 = tmp5 %>% group_by(primary,secondary,demog.age_category) %>% summarise_with_totals(
+  `Median [IQR]` = sprintf_list("%1.2g [%1.2g \u2013 %1.2g]", quantile(outcome.length_of_stay,c(0.5,0.25,0.75),na.rm = TRUE)),
+  .total = "Overall", .total_first = TRUE
+) %>% rename(`Length of stay`=demog.age_category) %>% 
+  hux_tidy(rowGroupVars = vars(`Length of stay`),colGroupVars = vars(primary,secondary))
+
+t1b = tmp5 %>% group_by(primary,secondary,demog.age_eligible) %>% summarise(
+  `Median [IQR]` = sprintf_list("%1.2g [%1.2g \u2013 %1.2g]", quantile(outcome.length_of_stay,c(0.5,0.25,0.75),na.rm = TRUE)),
+) %>% hux_tidy(rowGroupVars = vars(demog.age_eligible),colGroupVars = vars(primary,secondary))
+
+t2 = tmp5 %>% group_by(primary,secondary,demog.age_category) %>% summarise_with_totals(
+    `N (%)` = hux_sprintf("%1.0f/%1.0f  (%1.1f%%)",
+                           sum(outcome.icu_duration > 0,na.rm = TRUE),
+                          n(), sum(outcome.icu_duration > 0,na.rm = TRUE)/n()*100),
+    .total = "Overall", .total_first = TRUE
+  ) %>% 
+  rename(`ICU admission`=demog.age_category) %>% 
+  hux_tidy(rowGroupVars = vars(`ICU admission`),colGroupVars = vars(primary,secondary))
+
+t2b = tmp5 %>% group_by(primary,secondary,demog.age_eligible) %>% summarise(
+  `N (%)` = hux_sprintf("%1.0f/%1.0f  (%1.1f%%)",
+                           sum(outcome.icu_duration > 0,na.rm = TRUE),
+                          n(), sum(outcome.icu_duration > 0,na.rm = TRUE)/n()*100)
+) %>% hux_tidy(rowGroupVars = vars(demog.age_eligible),colGroupVars = vars(primary,secondary))
+
+t3 = tmp5 %>% group_by(primary,secondary,demog.age_category) %>% summarise_with_totals(
+    `Median [IQR]` = sprintf_list("%1.2g [%1.2g \u2013 %1.2g]", quantile(outcome.icu_duration,c(0.5,0.25,0.75),na.rm = TRUE)),
+    .total = "Overall", .total_first = TRUE
+  ) %>% 
+  rename(`ICU length of stay`=demog.age_category) %>% 
+  hux_tidy(rowGroupVars = vars(`ICU length of stay`),colGroupVars = vars(primary,secondary))
+
+t3b = tmp5 %>% group_by(primary,secondary,demog.age_eligible) %>% summarise(
+  `Median [IQR]` = sprintf_list("%1.2g [%1.2g \u2013 %1.2g]", quantile(outcome.icu_duration,c(0.5,0.25,0.75),na.rm = TRUE)),
+) %>% hux_tidy(rowGroupVars = vars(demog.age_eligible),colGroupVars = vars(primary,secondary))
+
+
+t4 = tmp5 %>% group_by(primary,secondary,demog.age_category) %>% summarise_with_totals(
+    `N (%)` = hux_sprintf("%1.0f/%1.0f  (%1.1f%%)",
+                             sum(outcome.inpatient_death_days > 0,na.rm = TRUE),
+                            n(), sum(outcome.inpatient_death_days > 0,na.rm = TRUE)/n()*100),
+    .total = "Overall", .total_first = TRUE
+  ) %>% 
+  rename(`All-cause mortality`=demog.age_category) %>% 
+  hux_tidy(rowGroupVars = vars(`All-cause mortality`),colGroupVars = vars(primary,secondary))
+
+t4b = tmp5 %>% group_by(primary,secondary,demog.age_eligible) %>% summarise(
+  `N (%)` = hux_sprintf("%1.0f/%1.0f  (%1.1f%%)",
+                             sum(outcome.inpatient_death_days > 0,na.rm = TRUE),
+                            n(), sum(outcome.inpatient_death_days > 0,na.rm = TRUE)/n()*100)
+) %>% hux_tidy(rowGroupVars = vars(demog.age_eligible),colGroupVars = vars(primary,secondary))
+
+
+t = rbind(t1, t1b %>% tail(-3), t2 %>% tail(-2),t2b %>% tail(-3), t3 %>% tail(-2),t3b %>% tail(-3), t4 %>% tail(-2), t4b %>% tail(-3)) 
+t %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Detailed comparison of outcomes including length of stay, ICU admission, ICU length of stay, and all-cause mortality, in different groupings of patients presenting with acute lower respiratory tract disease (aLRTD). aLRTD patients are divided into SARS-CoV-2 PCR positive versus SARS-CoV-2 PCR negative patients, and into infective and non-infective comparison groups. In each group the presenting features of pneumonia, non-pneumonia lower resiratory tract (NP-LRTI), heart failure (HF) and chronic respiratory disease exacerbation (CRDE) are considered. More than one of these presenting features may be present in any one patient.", 
+    index=2)
+
+
+# Short version for main paper
+t %>% select(1,2,12,16,17,21,22) %>%
+  hux_set_font(defaultFontSize = 6) %>%
+  hux_auto_widths() %>%
+  huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) %>% 
+  hux_save_as(filename = out("table2"),formats = c("docx","html","pdf","png"),size = std_size$full)
+```
+
+# Table 3
+
+```{r F5}
+pTS = ggplot(plotData2, aes(x=start_date_of_week(admission.study_week), y=per100K, colour=demog.age_category))+
+  geom_rect(data = lockdowns, mapping=aes(xmin=start_date,xmax=end_date,ymin=0,ymax=Inf),inherit.aes = FALSE, colour="grey95", alpha=0.1)+
+  #geom_smooth(se = FALSE,method = "gam",family=poisson(),formula = y~s(x, bs = "cs"))+
+  geom_line(data = plotData3, aes(x=date, y=medianPer100K, colour=demog.age_category))+
+  geom_ribbon(data = plotData3, aes(x=date,ymin=lowerPer100K, ymax=upperPer100K, fill=demog.age_category), colour=NA, linetype="dotted", alpha=0.15, inherit.aes = FALSE,size=0.5)+
+  geom_point(size=0.01)+
+  scale_x_date(date_breaks = "8 weeks",name=NULL)+
+  scale_color_brewer(palette = "Paired",name=NULL,aesthetics = c("fill","color"))+
+  facet_wrap(vars(admission.category),ncol=3)+
+  ylab("admissions per 100K per week")+
+  scale_y_continuous(trans="log1p", breaks = c(0,3,10,30,100,300))
+
+# gg_save_as(pTS, out("fig5-timeseries-pop-adjust"),size = std_size$third)
+
+```
+
+```{r T3}
+
+pop2 = pop %>% group_by(demog.age_category = age_category) %>% summarise_with_totals(population = sum(population), .total = "Overall", .total_first = TRUE)
+pop3 = pop %>% mutate(demog.age_eligible = case_when(
+  age_category %in% c("65-74","75-84","85+") ~ "65+",
+  TRUE ~ "18-64"
+)) %>% group_by(demog.age_eligible) %>% summarise_with_totals(population = sum(population), .total = "Overall", .total_first = TRUE)
+
+t1 = tmp5 %>% filter(admission.study_week >= study_week("2020-08-01") & admission.study_week < study_week("2021-08-01")) %>%
+   group_by(primary,secondary,demog.age_category) %>% summarise(
+    N = n()
+  ) %>% 
+  inner_join(pop2, by="demog.age_category") %>%
+  mutate(`per 100K` = sprintf("%1.1f",N/population*100000)) %>%
+  rename(`Age`=demog.age_category) %>% select(-N) %>%
+  hux_tidy(rowGroupVars = vars(`Age`,population),colGroupVars = vars(primary,secondary))
+
+
+
+t1b = tmp5 %>% filter(admission.study_week >= study_week("2020-08-01") & admission.study_week < study_week("2021-08-01")) %>%
+   group_by(primary,secondary,demog.age_eligible) %>% summarise_with_totals(
+    N = n(),
+    .total = "Overall", .total_first = TRUE
+  ) %>% 
+  inner_join(pop3, by="demog.age_eligible") %>%
+  mutate(`N (per 100K)` = sprintf("%1.1f",N/population*100000)) %>%
+  rename(`Age`=demog.age_eligible) %>% select(-N) %>%
+  hux_tidy(rowGroupVars = vars(`Age`,population),colGroupVars = vars(primary,secondary))
+
+t = rbind(t1, t1b %>% tail(-3))
+
+t %>% 
+  hux_auto_widths() %>% 
+  sup$add_table(
+    caption="Detailed comparison of aLRTD cumulative case rate ( and rate per 100,000 people) in hospitalized adults in Bristol, UK over 12 months (Aug 2020 – July 2021) in different groupings of patients presenting with acute lower respiratory tract disease (aLRTD). aLRTD patients are divided into SARS-CoV-2 PCR positive versus SARS-CoV-2 PCR negative patients, and into infective and non-infective comparison groups. In each group the presenting features of pneumonia, non-pneumonia lower resiratory tract (NP-LRTI), heart failure (HF) and chronic respiratory disease exacerbation (CRDE) are considered. More than one of these presenting features may be present in any one patient.", 
+    index=3)
+
+
+t2 = t %>% select(c(1,2,3,13,17,18,22,23)) %>%
+  # huxtable::set_colspan(huxtable::everywhere,huxtable::everywhere,1) %>%
+  huxtable::set_colspan(1,5,2) %>%
+  huxtable::set_colspan(1,7,2) %>%
+  hux_set_font(defaultFontSize = 7) %>%
+  hux_auto_widths(including_headers = FALSE) %>%
+  #huxtable::set_col_width(c(0.9,0.9,1.2,1.2,1,1,1,1)) %>%
+  huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) 
+
+
+
+pTS2 = t2 %>%
+  as.long_format_table() %>%
+  gg_formatted_table(tableWidthInches = 5.3,colWidths = c(1,1,1.25,1.25,1,1,1,1))
+
+# TODO: the formatting of this table needs a bit of work
+
+p = pTS+pTS2+patchwork::plot_layout(ncol=1,heights = c(1,1))+patchwork::plot_annotation(tag_levels = "A")
+gg_save_as(p, out("fig3-incidence-by-age"),size = ggrrr::std_size$half)
+
+gg_save_as(pTS, out("fig3-panelA-incidence-by-age"),size = ggrrr::std_size$quarter)
+
+t2 %>% hux_save_as(filename = out("fig3-panelB-table"),formats = c("docx","html","pdf","png"),size = std_size$third)
+
+```
+
+# 2 way comparison COVID vs non COVID infectives with significance tests
+
+```{r}
+tmp6 = tmp2 %>% filter(admission.category != v$admission.category$`Non-infective`) %>% 
+  mutate(
+    admission.category = forcats::fct_drop(admission.category) 
+  )
+
+tmp7 = tmp6 %>%
+  group_by(demog.age_category) %>% #,secondary) %>%
+  group_modify(function(d,g,...) {
+    d %>% compare_population(populationVar = admission.category,comparisonVars = 
+                               vars(outcome.length_of_stay, outcome.icu_admission, outcome.icu_duration, outcome.death_during_follow_up))
+  }) %>%
+  population_comparison_table() %>%
+  hux_auto_widths() %>%
+  sup$add_table(
+    caption="Statistical comparison of patients with aLRTD of infective origin by SARS-CoV-2 status, with age category stratification, on the outcomes of length of stay (excluding missing variables), ICU admission duration in patients that were admitted to ICU, or death during the follow up period. Both length of stay and ICU duration are compared with Kolmogorov–Smirnov non parametric tests, and the proportion of patients who died with Fisher exact tests. Significant differences exist in Length of stay, and 30 day mortality comparisons, however these do not account for other confounding variables such vaccination status or comorbidities, and we cannot infer causation from this comparison.",
+    index=4)
+```
+
+```{r Supplementary}
+sup$write()
+```
+
+# By hospital comparison
+
+```{r}
+
+# Reviewer only supplement
+
+# this data set involves all causes
+tmp8 = tmp2 %>% mutate( admission.category = forcats::fct_drop(admission.category) )
+sup2 = data_supplement(out = out,filename = "reviewer-only-additional-tables.xlsx", nameGlue = "Reviewer additional {index}")
+
+```
+
+
+```{r}
+# demographics ----
+
+tmp9 = tmp8 %>%
+  group_by(admission.category) %>% #,secondary) %>%
+  group_modify(function(d,g,...) {
+    d %>% compare_population(populationVar = admin.hospital,
+        comparisonVars = vars(
+          demog.age,
+          demog.age_category,
+          demog.gender,
+          demog.ethnicity,
+          demog.care_home_resident,
+          vaccination.covid_vaccination,
+          admission.charlson_comorbidity_index,
+          demog.imd_decile,
+        ))
+  }) %>%
+  population_comparison_table() %>%
+  hux_auto_widths()
+tmp9
+tmp9 %>%
+  sup2$add_table(
+    caption="Statistical comparison of patient demographics stratified by hospital of admission, and admission category (COVID, non COVID infective aLRTD, and non infective). The patient cohorts are different between the two hospitals, and this depends on the cause of admission. There is likely to be an age stratification effect here but we have not investigated at this point.",
+    index=1)
+
+tmp9 %>%
+  sup$add_table(
+    caption="Statistical comparison of patient demographics stratified by hospital of admission, and admission category (COVID, non COVID infective aLRTD, and non infective). The patient cohorts are different between the two hospitals, and this depends on the cause of admission. There is likely to be an age stratification effect here but we have not investigated at this point.",
+    index=5)
+
+```
+
+
+```{r}
+# By Hospital outcomes ----
+tmp10 = tmp8 %>%
+  group_by(admission.category) %>% #,secondary) %>%
+  group_modify(function(d,g,...) {
+    d %>% compare_population(populationVar = admin.hospital,comparisonVars = 
+                               vars(outcome.length_of_stay, outcome.icu_admission, outcome.icu_duration, outcome.death_during_follow_up))
+  }) %>%
+  population_comparison_table() %>%
+  hux_auto_widths()
+tmp10
+
+tmp10 %>% sup2$add_table(
+    caption="Statistical comparison of patient outcomes stratified by hospital of admission, and admission category (COVID, non COVID infective aLRTD, and non infective). As expected by the difference in case mix the patient outcomes are different between the two hospitals, and this depends on the cause of admission. There is an age interaction here particularly in the non covid infective aLRTD, the population of which are older and more deprived in hospital 1.",
+    index=2)
+
+tmp10 %>% sup$add_table(
+    caption="Statistical comparison of patient outcomes stratified by hospital of admission, and admission category (COVID, non COVID infective aLRTD, and non infective). As expected by the difference in case mix the patient outcomes are different between the two hospitals, and this depends on the cause of admission. There is an age interaction here particularly in the non covid infective aLRTD, the population of which are older and more deprived in hospital 1.",
+    index=6)
+```
+```{r}
+sup2$write()
+
+sup$write(filename = out("supplementary-materials-including-hospital-sites.xlsx"))
+```
+
+```{r}
+
+# How many pneumonia cases were not radiologically confirmed
+tmp2 %>% filter(diagnosis.pneumonia == v$diagnosis.pneumonia$yes) %>% group_by(
+  diagnosis.SOC_CAP_radiologically_confirmed
+) %>% count() %>% ungroup() %>% mutate(N = sum(n), p = n/N, label =sprintf("%1.0f/%1.0f (%1.2f%%)", n,N,p*100))
+
+
+# How many cases did not have covid test.
+tmp2 %>% group_by(admission.covid_pcr_result) %>% count() %>% ungroup() %>% 
+  mutate(N = sum(n), p = n/N,label =sprintf("%1.0f/%1.0f (%1.2f%%)", n,N,p*100))
+
+```

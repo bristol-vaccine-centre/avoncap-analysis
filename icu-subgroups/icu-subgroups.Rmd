@@ -1,0 +1,117 @@
+---
+title: "Factors predisposing to ICU admission or death."
+author: "Rob Challen"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = TRUE,
+  warning = TRUE
+)
+here::i_am("icu-subgroups/icu-subgroups.Rmd")
+source(here::here("common-setup.R"))
+source(here::here("model-bootstrapping.R"))
+
+out = outputter(directory=here::here("output/icu-subgroups"))
+sup = data_supplement(out = out)
+
+#options(reproduce.at="2022-03-07")
+options(reproduce.at="2022-04-04")
+options(hide.supplementary.tables=FALSE)
+
+options(dtrackr.strata_glue="{.value}")
+options(dtrackr.strata_sep=", ")
+options(dtrackr.default_message="{.count} subjects")
+options(dtrackr.show_zero_exclusions=FALSE)
+```
+
+# Background
+
+```{r}
+.non_cran("roogledocs","terminological/roogledocs",force=TRUE,subdir = "r-library")
+J = roogledocs::JavaApi$new()
+paper = J$RoogleDocs$new()
+paper$findOrCreateDocument("icu-admission-factors")
+suppl = J$RoogleDocs$new()
+suppl$findOrCreateDocument("icu-admission-factors-suppl")
+
+```
+
+# Materials
+
+* Excluding repeat admissions as determined by NHS number.
+* Using inferred cases as `admission.date > "2022-01-24" ~ "Omicron", admission.date > "2021-11-01" ~ NA_character_, admission.date > "2021-06-01" ~ "Delta"`
+
+```{r F1_materials_flowchart}
+avoncap_raw = load_data() 
+avoncap_original = avoncap_raw %>% normalise_data() 
+avoncap_variants_data = avoncap_original %>% avoncap_variants()
+v=avoncap_variants_data %>% get_value_sets()
+
+# Analysis specific 
+raw_data  = avoncap_variants_data %>% 
+  mutate(
+    # demog.age_decade = demog.age/10,
+    demog.age_category = cut(demog.age,breaks = c(0,35,55,70,85,Inf), labels = c("18-34y","35-54y","55-69y","70-84y","85y+"), include.lowest = FALSE,ordered_result = TRUE), 
+    day_7.WHO_score_gt_6 = ifelse(day_7.WHO_clinical_progression > v$day_7.WHO_clinical_progression$`score 6`,"WHO score 7-10","WHO score 4-6") %>% ordered(c("WHO score 4-6","WHO score 7-10")),
+    day_7.WHO_score_gt_5 = ifelse(day_7.WHO_clinical_progression > v$day_7.WHO_clinical_progression$`score 5`,"WHO score 6-10","WHO score 4-5") %>% ordered(c("WHO score 4-5","WHO score 6-10")),
+    day_7.any_ICU = ifelse(day_7.icu_length_of_stay > v$day_7.icu_length_of_stay$`0 day`,"ICU admission","No ICU admission") %>% ordered(c("No ICU admission","ICU admission"))
+  ) %>%
+  exclude_all(
+    is.na(day_7.WHO_clinical_progression)~"{.excluded} missing WHO clinical progression score",
+    .stage = "variant severity analysis"
+  ) %>% 
+  group_by(
+    day_7.WHO_score_gt_5
+  ) %>%
+  comment() #.headline = "{genomic.variant}",.messages = "{.count} subjects")
+
+raw_data %>% excluded() %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
+
+v2=raw_data %>% get_value_sets()
+raw_data %>% flowchart(filename = out("fig1-data-flow",delete = TRUE))
+```
+
+```{r}
+out("fig1-data-flow.png") %>% paper$updateFigure(figureIndex = 1,dpi = 300)
+```
+
+# Demographics of cohorts
+
+* Omicron admissions tendency to be older, more likely to be boosted, and with more co-morbidity
+* QCovid2 hazard of death given positive COVID test high in admitted patients (average context of hazard is community patient) but very much higher in Omicron patients. Survivor bias in that hospitalised patients with Omicron are more frail and elderly that those with Delta. Therefore we see lower risk patients not coming into hospital.
+
+```{r T1_demographics_by_variant}
+tmp = raw_data %>% compare_population(
+  populationVar = day_7.WHO_score_gt_5,
+  comparisonVars = vars(
+  demog.age,
+  demog.gender,
+  demog.ethnicity,
+  admission.charlson_comorbidity_index,
+  genomic.variant_inferred,
+  # qcovid2.hazard_ratio,
+  vaccination.vaccination,
+  #day_7.max_o2_gt_28,
+  #day_7.los_gt_3,
+  #day_7.WHO_score_gt_5
+  ))
+h = tmp %>% population_comparison_table() 
+h = h %>% hux_auto_widths() %>% 
+  huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) 
+h %>% hux_save_as(out("table1-population-comparison"),size=std_size$landscape)
+```
+https://academic.oup.com/aje/article/185/1/65/2662306#52974067
+http://rstudio-pubs-static.s3.amazonaws.com/5752_fc41dca85dd24539bc99868697de83d0.html
+https://tlverse.org/tlverse-handbook/tmle3.html#fit-the-tmle
+
+```{r}
+
+h %>% roogledocs::as.long_format_table() %>% glimpse() %>% paper$updateTable(tableIndex = 1,tableWidthInches = 6.2)
+
+```

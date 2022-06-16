@@ -1,0 +1,149 @@
+---
+title: "COPD exacerbation"
+author: "George Qian"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = TRUE
+)
+
+# The `here` library sorts out all relative paths.
+here::i_am("copd-exacerbation/copd-exacerbation.Rmd")
+
+# common-setup will attempt to load all the dependencies including 
+# ggrrr and dtrackr.
+source(here::here("common-setup.R"))
+
+# This creates a function that can be used to put all the outputs (like) a specific directory
+out = outputter(directory=here::here("output/copd-exacerbation"))
+
+# don't need this yet.
+# sup = data_supplement(out = out)
+# options(hide.supplementary.tables=TRUE)
+
+# this will set the latest date of a data file that will be loaded by the data load scripts.
+# this forces a particular version fo the files for this script.
+options(reproduce.at="2022-05-19")
+
+# ignore these options for the time being they are
+# for formatting the flowchart.
+options(dtrackr.strata_glue="{.value}")
+options(dtrackr.strata_sep=", ")
+options(dtrackr.default_message="{.count} admissions")
+options(dtrackr.show_zero_exclusions=FALSE)
+
+# this file contains all the functions to load the data and some date manipulation functions
+source(here::here("lrtd-incidence/lrtd-incidence-data.R"))
+
+```
+
+## Load data
+
+```{r data}
+
+# Load the data from input directory. 
+# This assumes a file will exist that starts with AvonCAPLRTDCentralDa_y1..., AvonCAPLRTDCentralDa_y2... in the input directory. _y1, _y2 must be present.
+# it will produce one data set from the multiple files.
+lrtd_data = load_data("AvonCAPLRTDCentralDa")
+
+# This will rename the variables and sort out factor levels. 
+# This has to be done for the ltrd data in a slightly bespoke way because of the multiple file formats.
+lrtd_norm = lrtd_normalise(lrtd_data)
+# This will augment the data with "standard" outcomes that I have defined in the data-wrangling.R file.
+# This augments the data with a set of "standard" extra variables. However some of these require
+# precise dates that are not present in the lrtd data sets and so this throws a set of warnings around
+# not being able to compute things. I need to tidy this up, and am thinking about a naming convention for these things that
+# are data set dependent.
+lrtd_aug = lrtd_norm %>% augment_data()
+
+
+# this constructs a helper list which tells you the dataframe columns and factor levels as a list
+v = lrtd_aug %>% get_value_sets()
+# typing `v$` at the console should give you some auto-complete support to help navigate the copd_study dataframe.
+
+```
+
+## Study specific pipeline
+
+```{r}
+# Might want to change these which are defaulted to the start and end of the data:
+start_week = min(lrtd_aug$admission.study_week,na.rm=TRUE)
+end_week = max(lrtd_aug$admission.study_week,na.rm=TRUE)
+# maybe for example:
+# start_week = study_week(as.Date("2021-01-01"))
+# end_week = study_week(as.Date("2022-01-01"))
+
+# This sets up the data pipeline
+# The data frame is being tracked using dtrackr (https://terminological.github.io/dtrackr/index.html)
+# It also does some standard exclusions. 
+# Depending on what you want to do these exclusions may need to be reviewed.
+copd_study = lrtd_aug %>% 
+  comment(.messages = "{.count} patients") %>%
+  include_any(
+    admission.study_week >= start_week & admission.study_week < end_week ~ "{.count} patients admitted \nbetween {start_date_of_week(start_week)} \n and {start_date_of_week(end_week)}"
+  ) %>%
+  exclude_all(
+      admin.consented == v$admin.consented$`Declined consent` | admin.pp_consented == v$admin.pp_consented$`Declined consent` ~ "{.excluded} declined consent",
+      admin.withdrawal == v$admin.withdrawal$yes ~ "{.excluded} withdrew consent"
+  ) %>% 
+  group_by(comorbid.copd, .messages="with comorbid COPD") %>%
+  comment("{.count} patients")
+# N.B. more data filtering usually expected here. 
+# probably want to include_any with COPD 
+
+
+# This will give a xlsx of all the cases that were excluded
+copd_study %>% excluded() %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
+
+# This will give you a figure 1 consort flow chart. This is a dtrackr function.
+copd_study %>% flowchart(filename = out("fig1-flowchart"))
+
+# Untracking the data frame means that normal dplyr / tidyverse functions will be used rather than 
+# the overloaded versions from dtrackr. This will be slightly more reliable, but from this point onwards no changes will be tracked.
+copd_data = copd_study %>% untrack()
+
+```
+
+## Plotting stuff
+
+```{r}
+
+# ggrrr has a set of functions making ggplots behave themselves.
+# a prejudiced theme for publication and sensible size defaults are enforced by the following
+ggrrr::gg_pedantic()
+
+p = ggplot(copd_study,aes(x=comorbid.copd,fill=comorbid.copd))+geom_bar()
+
+# ggrrr has some ggplot saving functions that enforces standard sizes and saves in multiple formats:
+# this is good for knowing what it is going to look like at publication. Overriding R markdowns decision making about sizing.
+p %>% ggrrr::gg_save_as(out("fig2-random-plot"),size = ggrrr::std_size$sixth)
+```
+
+## Comparison tables
+
+```{r}
+
+# I've looked at a set of functions to generate comparison tables
+# there are in descriptive-tables.R
+
+t = compare_population(copd_study, 
+    populationVar = comorbid.copd,
+    comparisonVars = vars(
+      demog.age,
+      demog.gender,
+      demog.ethnicity
+    )
+) %>% population_comparison_table()
+
+# ggrrr has some functions to render tables into different formats. 
+# although docx seems not to be working 
+t %>% hux_save_as(out("tab1-random-comparison.html"))
+
+```
