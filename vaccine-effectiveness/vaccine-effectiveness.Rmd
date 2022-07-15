@@ -28,7 +28,7 @@ out = outputter(directory=here::here("output/vaccine-effectiveness"))
 
 # this will set the latest date of a data file that will be loaded by the data load scripts.
 # this forces a particular version fo the files for this script.
-options(reproduce.at="2022-06-10")
+options(reproduce.at="2022-07-11")
 
 # ignore these options for the time being they are
 # for formatting the flowchart.
@@ -38,8 +38,6 @@ options(dtrackr.default_message="{.count} admissions")
 options(dtrackr.show_zero_exclusions=FALSE)
 
 # this file contains all the functions to load the data and some date manipulation functions
-source(here::here("lrtd-incidence/lrtd-incidence-data.R"))
-
 ```
 
 ## Load data
@@ -50,6 +48,7 @@ source(here::here("lrtd-incidence/lrtd-incidence-data.R"))
 # This assumes a file will exist that starts with AvonCAPLRTDCentralDa_y1..., AvonCAPLRTDCentralDa_y2... in the input directory. _y1, _y2 must be present.
 # it will produce one data set from the multiple files.
 data_raw = load_data("DeltaVE")
+data_raw %>% save_data_source_info(out)
 data_norm = data_raw %>% normalise_data()
 
 data_aug = data_norm %>% augment_data() 

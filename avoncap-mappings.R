@@ -6,6 +6,9 @@
   # in the dropdowns.
   "record_number" = .normalise_name(admin.record_number),
   "duplicate" = .normalise_yesno(admin.duplicate),
+  "enrollment_date" = .normalise_date(
+    admin.enrollment_date
+  ),
   "c19_diagnosis" = .normalise_list(
     diagnosis.standard_of_care_COVID_diagnosis, c("Pneumonia","LRTI","HF","other resp symptoms")),
   # "acute_illness" = .normalise_yesno(
@@ -25,10 +28,12 @@
   #   diagnosis.COVID_negative,
   #   diagnosis.no_COVID_test,
   # )), # So this field changed from checkboxes to a list.
+  
   "c19_adm_swab" = .normalise_list(
     diagnosis.admission_swab,
     values = c("COVID-19 positive","COVID-19 negative","Indeterminate","Known community/recent positive","Not performed")
   ),
+  
   # "c19_adm_status" = .normalise_checkboxes(vars(
   #   diagnosis.COVID_laboratory_confirmed,
   #   diagnosis.COVID_patient_reported_test,
@@ -36,6 +41,7 @@
   #   diagnosis.not_COVID_negative_test,
   #   diagnosis.not_tested_for_COVID
   # )), # c19_adm_status isnt being completed for this round of case control - as it was done so badly the first time around it was nonsense
+  
   "c19_test_type" = .normalise_list(
     diagnosis.test_type,
     values = c("Lateral Flow Only","PCR Confirmed")
@@ -73,6 +79,19 @@
       "Other race",
       "Unknown"
     )),
+  # sometimes this column is names ethnicity sometimes ethnicity2
+  "ethnicity" = .normalise_list(
+    demog.ethnicity, c(
+      "White British",
+      "White other",
+      "Mixed origin",
+      "Black",
+      "Asian",
+      "Other race",
+      "Unknown"
+    )),
+  
+  
   "care_home" = .normalise_yesno(
     demog.care_home_resident),
   "drugs" = .normalise_checkboxes(vars(
@@ -82,6 +101,8 @@
     demog.marijuana_abuse,
     demog.other_inhaled_drug_abuse
   )),
+  "vaping" = .normalise_list(
+    demog.vaping, c("yes","no","unknown")),
   "alc_units" = .normalise_name(
     demog.units_of_alcohol
   ),
@@ -118,8 +139,20 @@
   "c19_variant" = .normalise_variant(
     genomic.variant),
   
+  #### Admission dates: ----
+  "year" = .normalise_double(
+    admission.year, limits = c(2019,2023)),
+  # "week_number" = .normalise_double(admission.week, limits = c(1,53)),
+  "study_week" = .normalise_double(
+    admission.study_week),
+  "admission_date" = .normalise_date(
+    admission.date),
+  "hospital" = .normalise_text_to_factor(admin.hospital,c("NBT","BRI")),
+  
   #### Admission symptoms signs: ----
   ## TODO: range and data quality checks
+  "ics" = .normalise_yesno(
+    admission.on_inhaled_corticosteroids),
   "immsup" = .normalise_yesno(
     admission.on_immunosuppression),
   "psi_class" = .normalise_list(
@@ -150,8 +183,7 @@
     admission.previous_covid_infection_date),
   "c19d_preadm" = .normalise_name(
     admission.time_since_covid_diagnosis),
-  "admission_date" = .normalise_date(
-    admission.date),
+  
   "rockwood" = .normalise_name(
     admission.rockwood_score),
   "cci_total_score" = .normalise_name(
@@ -341,5 +373,48 @@
     comorbid.no_HIV,
     comorbid.HIV,
     comorbid.AIDS
-  )) 
+  )), 
+  ## NHS data set only mappings ----
+  "final_soc_lrtd_diagnosis" = .normalise_checkboxes(renameToVars = vars(
+    diagnosis.SOC_CAP_radiologically_confirmed,
+    diagnosis.SOC_CAP_clinically_confirmed,
+    diagnosis.SOC_CAP_no_radiology,
+    diagnosis.SOC_LRTI,
+    diagnosis.SOC_Empyema_or_abscess,
+    diagnosis.SOC_exacerbation_COPD,
+    diagnosis.SOC_exacerbation_non_COPD,
+    diagnosis.SOC_congestive_heart_failure,
+    diagnosis.SOC_non_infectious_process,
+    diagnosis.SOC_non_LRTI
+  )),
+  "covid_19_diagnosis" = .normalise_list(
+    diagnosis.covid_19_diagnosis,
+    c("COVID-19 - laboratory confirmed","COVID-19 - patient reported test", "COVID-19 - clinical diagnosis (but negative test)",
+      "COVID-19 - negative test, unlikely COVID-19 disease","No test performed" )
+  ),
+  
+  "c19_adm_swab" = .normalise_checkboxes_to_list(
+    diagnosis.admission_swab_old,
+    values = c("COVID-19 positive","COVID-19 negative","Indeterminate","Known community/recent positive","Not performed")
+  ),
+  "ppv23" = .normalise_list(
+    vaccination.pneumovax,
+    c("Not received","Received","Unknown"), codes=c(2,1,3)
+  ),
+  "flu_vaccine" = .normalise_list(
+    vaccination.influenza_vaccination,
+    c("Not received","Received","Unknown"), codes=c(2,1,3)
+  ),
+  "consented" = .normalise_list(
+    admin.consented,
+    c("Not approached","Yes","Declined consent"), zeroValue = TRUE
+  ),
+  "ppc" = .normalise_list(
+    admin.pp_consented,
+    c("Not approached","Yes","Declined consent"), zeroValue = TRUE
+  ),
+  "withdrawal" = .normalise_yesno(
+    admin.withdrawal
+  )
+  
 )

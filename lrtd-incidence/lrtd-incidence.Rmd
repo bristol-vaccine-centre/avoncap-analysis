@@ -49,7 +49,9 @@ source(here::here("lrtd-incidence/lrtd-incidence-data.R"))
 ```{r data}
 
 lrtd_data  = load_data("AvonCAPLRTDCentralDa")
-lrtd_norm = lrtd_normalise(lrtd_data)
+lrtd_data %>% save_data_source_info()
+
+lrtd_norm = normalise_data(lrtd_data)
 tmp2 = lrtd_norm %>% lrtd_study_data(study_end = "2021-11-15")
 v = tmp2 %>% get_value_sets()
 
@@ -60,8 +62,6 @@ tmp2 %>% excluded() %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
 tmp2 %>% flowchart(filename = out("supp-fig1-flowchart"))
 
 tmp2 = tmp2 %>% untrack()
-
-write(x = attr(lrtd_data,"file"), file = out("data_sources.txt"))
 ```
 
 # Upset plot
@@ -717,8 +717,13 @@ sup$write()
 # Reviewer only supplement
 
 # this data set involves all causes
-tmp8 = tmp2 %>% mutate( admission.category = forcats::fct_drop(admission.category) )
+tmp8 = tmp2 %>% mutate( 
+  admission.category = forcats::fct_drop(admission.category),
+  admin.hospital = recode_factor(admin.hospital, NBT = "Hospital 1", BRI = "Hospital 2")
+)
 sup2 = data_supplement(out = out,filename = "reviewer-only-additional-tables.xlsx", nameGlue = "Reviewer additional {index}")
+
+
 
 ```
 

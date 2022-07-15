@@ -73,59 +73,74 @@ compare_population = function(
           sd.value = sd(!!comp,na.rm = TRUE),
           median = quantile(!!comp,0.5,na.rm = TRUE),
           lqr = quantile(!!comp,0.25,na.rm = TRUE),
-          uqr = quantile(!!comp,0.75,na.rm = TRUE),
-          value = sprintf("%1.3g \u00B1 %1.3g",mean.value,sd.value),
-          group = factor("(mean \u00B1 SD)")
+          uqr = quantile(!!comp,0.75,na.rm = TRUE)
         ) %>% 
         mutate(variable = variableName, variable.original = variableLabel) %>% 
-        select(side,variable,variable.original,N, value,group,mean.value,sd.value,median,lqr,uqr)
+        select(side,variable,variable.original,N,mean.value,sd.value,median,lqr,uqr)
       
+      # How many sides does the comparison have.
       sides = compare_count %>% pull(side) %>% unique() %>% length()
+      
+      # test for skewness possible but upper limit is a function of size:
+      # this simulates:0.95 CI for different sample sizes
+      # tmp = tibble(skew95 = sapply(seq(1,4,length.out = 20),function(f) sapply(1:100,function(e) e1071::skewness(rnorm(10^f))) %>% abs() %>% quantile(0.95)), size = 10^seq(1,4,length.out = 20))
+      # skew95 and size have a log-log relationship
+      # ggplot(tmp, aes(x=size,y=skew95))+geom_point()+geom_smooth()+scale_x_log10()+scale_y_log10()
+      # which can be fitted:
+      # lm(formula = log(skew95) ~ log(size), tmp) giving the following relationship for the 95% CI of the absolute value of skewness in a normal:
+      skew95 = function(size) {exp(1.23740 -0.45564 * log(size))}
+      
+      # Determine if the continuous variable is normally distributed
+      # This uses shapiro wilkes test, or for larger groups (>5000) a test to see if the skew is > 95% of expected for a normal distribution.
+      parametric = tryCatch({
+          # cannot reject null hypothesis that it is normally distributed at 0.05
+          # will throw an error if size is gt 5000.
+          shap = (avoncap_variants %>% group_by(side = !!populationVar) %>% rstatix::shapiro_test(!!comp) %>% pull(p) %>% min())
+          message(as_label(comp),": lowest p-value for shapiro wilks test: ",shap)
+          shap > 0.05
+          # Shapiro test will fail for larger N
+        }, error = function(e) {
+          # browser()
+          # abs(skew) is larger than expected for a normal at p = 0.05
+          tryCatch({
+            maxSkew = avoncap_variants %>% group_by(side = !!populationVar) %>% summarise(skew = abs(e1071::skewness(!!comp, na.rm=TRUE,type=2)), size = n()) %>% 
+              mutate(skew95 = skew95(size)) %>% filter(skew/skew95 == max(skew/skew95))
+            message(as_label(comp),": max skew value is ",maxSkew$skew," versus expected 95% quantile ",maxSkew$skew95," on ",maxSkew$size," samples.")
+            maxSkew$skew < maxSkew$skew95
+          }, error = function(e) FALSE)
+      })
+      
+      if(length(parametric)==0) parametric = FALSE
+      
+      if (parametric) {
+        compare_count = compare_count %>% mutate(
+          value = sprintf("%1.3g \u00B1 %1.3g",mean.value,sd.value),
+          alt.value = sprintf("%1.3g \u00B1 %1.3g (%1.0f)",mean.value,sd.value,N),
+          group = factor("(mean \u00B1 SD)")
+        )
+      } else {
+        compare_count = compare_count %>% mutate(
+          value = sprintf("%1.3g [%1.3g \u2013 %1.3g]",median,lqr,uqr),
+          alt.value = sprintf("%1.3g [%1.3g \u2013 %1.3g] (%1.0f)",median,lqr,uqr,N),
+          group = factor("(median [IQR])")
+        )
+      }
       
       # TODO: TEST THIS: what about p-value when more than 2 comparison classes
       # https://statsandr.com/blog/how-to-do-a-t-test-or-anova-for-many-variables-at-once-in-r-and-communicate-the-results-in-a-better-way/#anova
       # kruskal.test or anova depending on normality assumption
       if (p.value & sides > 1) {
         
-        # test for skewness possible but upper limit is a function of size:
-        # this simulates:0.95 CI for different sample sizes
-        # tmp = tibble(skew95 = sapply(seq(1,4,length.out = 20),function(f) sapply(1:100,function(e) e1071::skewness(rnorm(10^f))) %>% abs() %>% quantile(0.95)), size = 10^seq(1,4,length.out = 20))
-        # skew95 and size have a log-log relationship
-        # ggplot(tmp, aes(x=size,y=skew95))+geom_point()+geom_smooth()+scale_x_log10()+scale_y_log10()
-        # which can be fitted:
-        # lm(formula = log(skew95) ~ log(size), tmp) giving the following relationship for the 95% CI of the absolute value of skewness in a normal:
-        skew95 = function(size) {exp(1.23740 -0.45564 * log(size))}
-        
         formula = as.formula(paste0(as_label(comp)," ~ ",as_label(populationVar)))
-        parametric = tryCatch(
-          {
-            # cannot reject null hypothesis that it is normally distributed at 0.05
-            # will throw an error if size is gt 5000.
-            shap = (avoncap_variants %>% group_by(side = !!populationVar) %>% rstatix::shapiro_test(!!comp) %>% pull(p) %>% min())
-            message(as_label(comp),": lowest p-value for shapiro wilks test: ",shap)
-            shap > 0.05
-            # Shapiro test will fail for larger N
-          }, error = function(e) {
-            # browser()
-            # abs(skew) is larger than expected for a normal at p = 0.05
-            tryCatch({
-              maxSkew = avoncap_variants %>% group_by(side = !!populationVar) %>% summarise(skew = abs(e1071::skewness(!!comp, na.rm=TRUE,type=2)), size = n()) %>% 
-                mutate(skew95 = skew95(size)) %>% filter(skew/skew95 == max(skew/skew95))
-              message(as_label(comp),": max skew value is ",maxSkew$skew," versus expected 95% quantile ",maxSkew$skew95," on ",maxSkew$size," samples.")
-              maxSkew$skew < maxSkew$skew95
-            }, error = function(e) FALSE)
-          }
-        )
-        
-        if(length(parametric)==0) parametric = FALSE
         
         if (!parametric) {
           # this is a non parametric problem
           
           if (sides == 2) {
-            # we can use ks test to
+            # we can use ks test to for 2 sides non-parametric
             tmp = avoncap_variants %>% pull(!!comp)
             tiesFrac = 1-length(unique(tmp))/length(tmp)
+            # However if there are lots of ties (and we have enabled it a wilcoxon is better)
             if (getOption("use.wilcoxon",TRUE) & tiesFrac > 0.75) {
               pval = avoncap_variants %>% ungroup() %>% tidy_wilcoxon(formula) %>% pull(p)
               pmethod = "2-sided wilcoxon"
@@ -134,11 +149,13 @@ compare_population = function(
               pmethod = "2-sided ks"
             }
           } else {
+            # more than 2 sides
             # we can use kruskal-wallis test to detect if all samples come from same distribution
             pval = avoncap_variants %>% rstatix::kruskal_test(formula) %>% pull(p)
             pmethod = "kruskal"
           }
         } else {
+          # parametric
           if (sides == 2) {
             
             pval = avoncap_variants %>% rstatix::t_test(formula) %>% pull(p)
@@ -156,17 +173,8 @@ compare_population = function(
           p.excluding_missing = pval
         )
         
-        if(parametric) {
-          compare_count = compare_count %>% mutate(
-            value = sprintf("%1.3g \u00B1 %1.3g",mean.value,sd.value),
-            group = factor("(mean \u00B1 SD)")
-          )
-        } else {
-          compare_count = compare_count %>% mutate(
-            value = sprintf("%1.3g [%1.3g \u2013 %1.3g]",median,lqr,uqr),
-            group = factor("(median [IQR])")
-          )
-        }
+        #browser()
+        
         
       }
       
@@ -204,10 +212,11 @@ compare_population = function(
         mutate(
           # value = sprintf("%1.1f%% [%1.1f%%\u00A0\u2013\u00A0%1.1f%%]",mean*100,lower*100,upper*100),
           value = sprintf("%1.1f%% [%1.1f%%\u2013%1.1f%%]",mean*100,lower*100,upper*100),
+          alt.value = sprintf("%1.1f%% (%1.0f/%1.0f)",mean*100,x,n),
           variable = variableName,
           variable.original = variableLabel
         ) %>%
-        select(side,variable,variable.original,group,N,value) %>%
+        select(side,variable,variable.original,group,N,value,alt.value) %>%
         ungroup()
       # %>%
       # tidyr::complete(side,variable,group,fill=list(N=0, value="\u2014"))
@@ -265,7 +274,7 @@ compare_population = function(
       return(compare_count)
     } else {
       message("skipping comparison: ",as_label(comp)," value is a ",class(avoncap_variants %>% pull(!!comp)))
-      return(tibble(side=character(),variable=character(),variable.original=character(),group=character(),N=integer(),value=character()))
+      return(tibble(side=character(),variable=character(),variable.original=character(),group=character(),N=integer(),value=character(),alt.value=character()))
     }
   })
   
@@ -310,21 +319,42 @@ compare_population = function(
   
 }
 
-population_comparison_table = function(comparison, show_method=TRUE ) {
+population_comparison_table = function(comparison, show_method=TRUE, compact=FALSE ) {
   grps = comparison %>% groups()
-  if(show_method) {
-    tmp2 = comparison %>% 
-      select(!tidyselect::any_of(c("p.including_missing","p.excluding_missing","variable.original"))) %>%
-      rename(Characteristic = variable,Group = group, `P-value`=p.value,method=p.method) %>% 
-      hux_tidy(rowGroupVars = vars(Characteristic,!!!grps,`P-value`,method,Group),colGroupVars = vars(side))
-    tmp2 = tmp2 %>% relocate(`P-value`,method,.after=last_col())
-    
+  show_p = "p.value" %in% colnames(comparison)
+  if (show_p) {
+    if (show_method) {
+      tmp2 = comparison %>% 
+        select(!tidyselect::any_of(c("p.including_missing","p.excluding_missing","variable.original"))) %>%
+        rename(Characteristic = variable,Group = group, `P-value`=p.value,method=p.method)
+      if (compact) {
+        tmp2 = tmp2 %>% select(-N,-value) %>% rename(value = alt.value)
+      } else {
+        tmp2 = tmp2 %>% select(-alt.value)
+      }
+      tmp2 = tmp2 %>% hux_tidy(rowGroupVars = vars(Characteristic,!!!grps,`P-value`,method,Group),colGroupVars = vars(side)) %>% relocate(`P-value`,method,.after=last_col())
+      
+    } else {
+      tmp2 = comparison %>% 
+        select(!tidyselect::any_of(c("p.including_missing","p.excluding_missing","variable.original","p.method"))) %>%
+        rename(Characteristic = variable,Group = group, `P-value`=p.value)
+      if (compact) {
+        tmp2 = tmp2 %>% select(-N,-value) %>% rename(value = alt.value)
+      } else {
+        tmp2 = tmp2 %>% select(-alt.value)
+      }
+      tmp2 = tmp2 %>% hux_tidy(rowGroupVars = vars(Characteristic,!!!grps,`P-value`,Group),colGroupVars = vars(side)) %>% relocate(`P-value`,.after=last_col())
+    }
   } else {
     tmp2 = comparison %>% 
-      select(!tidyselect::any_of(c("p.including_missing","p.excluding_missing","variable.original","p.method"))) %>%
-      rename(Characteristic = variable,Group = group, `P-value`=p.value) %>% 
-      hux_tidy(rowGroupVars = vars(Characteristic,!!!grps,`P-value`,Group),colGroupVars = vars(side))
-    tmp2 = tmp2 %>% relocate(`P-value`,.after=last_col())
+      select(!tidyselect::any_of(c("p.including_missing","p.excluding_missing","variable.original","p.method","p.value"))) %>%
+      rename(Characteristic = variable,Group = group)
+    if (compact) {
+      tmp2 = tmp2 %>% select(-N,-value) %>% rename(value = alt.value)
+    } else {
+      tmp2 = tmp2 %>% select(-alt.value)
+    }
+    tmp2 = tmp2 %>% hux_tidy(rowGroupVars = vars(Characteristic,!!!grps, Group),colGroupVars = vars(side))
   }
   tmp2
 }

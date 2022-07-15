@@ -8,8 +8,9 @@ here::i_am("common-setup.R")
 # ggrrr::unstable()
 
 # install specific release for stability purposes
-devtools::install_github("terminological/ggrrr@0.0.0.9005")
-# devtools::install_github("terminological/ggrrr")
+devtools::install_github("terminological/html2pdfr@0.4.1", build_opts = c("--no-multiarch"),quiet = TRUE,upgrade = FALSE)
+devtools::install_github("terminological/ggrrr@0.0.0.9007", build_opts = c("--no-multiarch"),quiet = TRUE,upgrade = FALSE)
+# ggrrr::unstable()
 
 library(ggrrr)
 
@@ -25,7 +26,9 @@ library(patchwork)
 # this will check to see if it is checked out for local development or load it from github.
 # non_cran("dtrackr","terminological/dtrackr@0.2.1",force=TRUE)
 
-devtools::install_github("terminological/dtrackr@0.2.1")
+# devtools::install_github("terminological/dtrackr@0.2.1")
+# devtools::install_local("~/Git/dtrackr")
+cran("dtrackr")
 library(dtrackr)
 
 ## standard functions ----
@@ -35,20 +38,24 @@ source(here::here("qcovid2.R"))
 source(here::here("descriptive-tables.R"))
 
 # Sets ggplot defaults
-ggrrr::gg_pedantic()
+ggrrr::gg_pedantic(font="Arial")
 
 # These override base message and warning and direct them to rlang::inform and rlang::warn respectively.
 # This may be a terrible idea.
-message = function(...) {
-  l = rlang::list2(...)
-  msg = paste0(lapply(l,as.character),collapse = "")
-  rlang::inform(msg,.frequency = "regularly", .frequency_id = msg)
-}
+# message = function(...) {
+#   l = rlang::list2(...)
+#   msg = paste0(lapply(l,as.character),collapse = "")
+#   msg = paste0(unname(msg),"\n")
+#   rlang::inform(msg,.frequency = "regularly", .frequency_id = msg)
+# }
 
-warning = function(...) {
-  l = rlang::list2(...)
-  msg = paste0(lapply(l,as.character),collapse = "")
-  rlang::warn(msg,.frequency = "regularly", .frequency_id = msg)
-}
+# warning = function(...) {
+#   l = rlang::list2(...)
+#   msg = paste0(lapply(l,as.character),collapse = "")
+#   msg = paste0(unname(msg),"\n")
+#   rlang::warn(msg,.frequency = "regularly", .frequency_id = msg)
+# }
 
+## Glue formatting functions
 
+fdmy = function(date) format(date,"%d %b %Y")

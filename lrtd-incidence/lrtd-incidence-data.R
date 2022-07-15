@@ -1,33 +1,7 @@
 here::i_am("lrtd-incidence/lrtd-incidence-data.R")
 source(here::here("lrtd-incidence/lrtd-mappings.R"))
 
-lrtd_normalise = function(lrtd_data = load_data("AvonCAPLRTDCentralDa")) {
-  ethn = readr::read_csv(here::here("input/Ethnicity Data.csv"))
-  lrtd_data2 = lrtd_data %>% left_join(ethn, by="record_number") %>%
-    # the years are sometimes missing when 
-    mutate(year = case_when(
-      !is.na(year) ~ year,
-      version == "y1" & week_number>30 ~ 2020, 
-      version == "y1" & week_number<=30 ~ 2021,
-      version == "y2" & week_number>30 ~ 2021, 
-      version == "y2" & week_number<=30 ~ 2022,
-      version == "y3" & week_number>30 ~ 2022, 
-      version == "y3" & week_number<=30 ~ 2023,
-      TRUE ~ NA_real_
-    )) %>%
-    mutate(study_week = (year-2020)*52+week_number)
-  # These variables get picked up by the additional mappings in lrtd_mappings:
-  lrtd_norm = lrtd_data2 %>% normalise_data(mappings = .lrtd_mappings)
-  
-  v = lrtd_norm %>% get_value_sets()
-  
-  lrtd_norm = lrtd_norm %>% mutate(
-    # this is a study specific variable.
-    admission.study_week_start_date = start_date_of_week(admission.study_week)
-  )
-  
-  return(lrtd_norm)
-}
+
 
 # returns a tracked data frame
 lrtd_study_data = function(lrtd_norm = lrtd_normalise(), study_start = NULL, study_end = Sys.Date()) {
@@ -36,6 +10,9 @@ lrtd_study_data = function(lrtd_norm = lrtd_normalise(), study_start = NULL, stu
   
   lrtd_aug = lrtd_norm %>% augment_data() %>% mutate(
     # this is a study specific variable.
+    # add in dates ----
+    admission.study_week_start_date = start_date_of_week(admission.study_week),
+    admin.hospital = recode_factor(admin.hospital, NBT = "Hospital 1", BRI = "Hospital 2"),
     demog.pcr_positive_by_age = if_else(diagnosis.covid_19_diagnosis == v$diagnosis.covid_19_diagnosis$`COVID-19 - laboratory confirmed`, demog.age_category, ordered(NA)),
   )
   

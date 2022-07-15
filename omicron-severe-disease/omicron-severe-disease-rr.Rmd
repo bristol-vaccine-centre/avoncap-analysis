@@ -42,8 +42,9 @@ options(use.wilcoxon=TRUE)
 * Using inferred cases as `admission.date > "2022-01-24" ~ "Omicron", admission.date > "2021-11-01" ~ NA_character_, admission.date > "2021-06-01" ~ "Delta"`
 
 ```{r F1_materials_flowchart}
-avoncap_raw = load_data() 
-write(x = attr(avoncap_raw,"file"), file = out("data_sources.txt"))
+avoncap_raw = load_data("DeltaVE") 
+avoncap_raw %>% save_data_source_info()
+
 
 avoncap_original = avoncap_raw %>% normalise_data() 
 avoncap_variants_data = avoncap_original %>% avoncap_variants()
