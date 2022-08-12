@@ -1,0 +1,132 @@
+---
+title: "variant-composition"
+author: "Rob Challen"
+date: "24/06/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = TRUE
+)
+
+# The `here` library sorts out all relative paths.
+here::i_am("vaccine-effectiveness/variant-composition.Rmd")
+
+# common-setup will attempt to load all the dependencies including 
+# ggrrr and dtrackr.
+source(here::here("common-setup.R"))
+
+# This creates a function that can be used to put all the outputs (like) a specific directory
+out = outputter(directory=here::here("output/variant-compostion"))
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+raw_lineages = ggrrr::cache_download("https://covid-surveillance-data.cog.sanger.ac.uk/download/lineages_by_ltla_and_week.tsv",.stale = 7)
+
+variants = readr::read_tsv(raw_lineages,na = c("Lineage data suppressed","Unassigned"))
+
+lineage_keys = jsonlite::read_json("https://raw.githubusercontent.com/cov-lineages/pango-designation/master/pango_designation/alias_key.json")
+
+lineage_keys = tibble(prefix = names(lineage_keys), expanded = lineage_keys)
+
+variants2 = variants %>% 
+  mutate(
+    prefix = Lineage %>% stringr::str_extract("^[A-Z]+"),
+    suffix = Lineage %>% stringr::str_sub(start = stringr::str_length(prefix)+1)
+  ) %>% 
+  left_join(lineage_keys, by="prefix") %>%
+  mutate(full_tree = case_when(
+    !is.null(expanded) & expanded != "" ~ paste0(expanded,suffix),
+    TRUE ~ paste0(prefix,suffix)
+  )) %>%
+  mutate(
+    lineage_class = case_when(
+      full_tree %>% stringr::str_starts("B.1.1.7") ~ "Alpha",
+      # full_tree %>% stringr::str_starts("B.1.617.2.4") ~ "Delta (AY.4)",
+      full_tree %>% stringr::str_starts("B.1.617.2") ~ "Delta",
+      # full_tree %>% stringr::str_starts("B.1.1.529.2") ~ "Omicron (BA.2)",
+      # full_tree %>% stringr::str_starts("B.1.1.529.4") ~ "Omicron (BA.4)",
+      # full_tree %>% stringr::str_starts("B.1.1.529.5") ~ "Omicron (BA.5)",
+      full_tree %>% stringr::str_starts("B.1.1.529") ~ "Omicron",
+      TRUE ~ "Other"
+    )
+  )
+  
+variants_uk = variants2 %>% 
+  group_by(WeekEndDate, lineage_class) %>% 
+  summarise(Count = sum(Count)) %>%
+  ungroup() %>%
+  tidyr::complete(WeekEndDate, lineage_class,fill = list(Count=0)) %>%
+  group_by(lineage_class) %>% 
+  arrange(WeekEndDate) %>% 
+  mutate(roll.Count = slider::slide_dbl(Count,sum,na.rm=TRUE,.before = 2,.after = 2)) %>% # stats::filter(Count,filter = rep(1,4),sides=1)) %>%
+  group_by(WeekEndDate) %>%
+  mutate(binom::binom.confint(roll.Count, sum(roll.Count), methods = "wilson"))
+
+variants_bristol = variants2 %>% 
+  filter(LTLA %in% c("E06000023","E06000025","E06000022","E06000024")) %>%
+  group_by(WeekEndDate, lineage_class) %>% 
+  summarise(Count = sum(Count)) %>%
+  ungroup() %>%
+  tidyr::complete(WeekEndDate, lineage_class,fill = list(Count=0)) %>%
+  group_by(lineage_class) %>% 
+  arrange(WeekEndDate) %>% 
+  mutate(roll.Count = slider::slide_dbl(Count,sum,na.rm=TRUE,.before = 2,.after = 2)) %>% # stats::filter(Count,filter = rep(1,4),sides=1)) %>%
+  group_by(WeekEndDate) %>%
+  mutate(binom::binom.confint(roll.Count, sum(roll.Count), methods = "wilson"))
+
+```
+```{r}
+
+
+
+plotData = bind_rows(
+  variants_uk %>% mutate(area = "UK"),
+  variants_bristol %>% mutate(area = "Bristol & surrounds")
+) %>% filter(WeekEndDate < "2022-05-05")
+
+p = ggplot(
+  plotData, 
+  aes(x=WeekEndDate,y=mean*100,fill=lineage_class))+
+  geom_area(stat="identity")+
+  scale_fill_brewer(palette="Pastel1",name=NULL)+
+  ylab("Proportion sequences (%)")+
+  xlab(NULL)+
+  scale_x_date(date_breaks = "1 month")+
+  facet_wrap(vars(area),ncol = 1)
+
+p %>% gg_save_as(out("lineages_supp"))
+
+```
+
+```{r}
+begin = min(plotData$WeekEndDate)
+end = max(plotData$WeekEndDate)
+
+cogDates = bind_rows(
+  plotData %>% group_by(area,lineage_class) %>% filter(Count > 0) %>% filter(WeekEndDate == min(WeekEndDate) & WeekEndDate!=begin) %>% mutate(type = "Emerged"),
+  plotData %>% group_by(area,lineage_class) %>% filter(mean > 0.95) %>% filter(WeekEndDate == min(WeekEndDate) & WeekEndDate!=begin) %>% mutate(type = "Dominant (start)"),
+  plotData %>% group_by(area,lineage_class) %>% filter(mean > 0.95) %>% filter(WeekEndDate == max(WeekEndDate) & WeekEndDate!=end) %>% mutate(type = "Dominant (end)"),
+  plotData %>% group_by(area,lineage_class) %>% filter(Count > 0) %>% filter(WeekEndDate == max(WeekEndDate) & WeekEndDate!=end) %>% mutate(type = "Extinction")
+) %>% mutate(type = factor(type,levels=c("Emerged","Dominant (start)","Dominant (end)","Extinction")))
+
+
+cogDates %>% select(area, Lineage = lineage_class, type, Date = WeekEndDate) %>%
+  filter(Lineage != "Other") %>%
+  hux_tidy(rowGroupVars = vars(area,Lineage), colGroupVars = vars(type)) %>%
+  hux_save_as(out("cog_dates"))
+```
+
+https://stat.ethz.ch/R-manual/R-devel/library/mgcv/html/multinom.html
+
+GAM with multinomial model & spline terms
