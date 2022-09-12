@@ -482,7 +482,7 @@ lrtd_normalise = function(lrtd_data = load_data("AvonCAPLRTDCentralDa")) {
   admission.cci_category = "CCI category",
   admission.covid_pcr_result = "PCR result",
   day_7.WHO_clinical_progression = "WHO Outcome score",
-  day_7.max_o2_level = "Max FiO\u2082",
+  day_7.max_o2_level = "Max FiO2",
   day_7.length_of_stay = "Length of Stay",
   demog.pcr_positive_by_age = "PCR positives (by age)",
   demog.age_eligible = "Age eligible for PneumoVax",

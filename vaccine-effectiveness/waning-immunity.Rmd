@@ -1,8 +1,9 @@
 ---
-title: "waning-immunity"
+title: "Vaccine induce and naturally acquired antibody to SARS-CoV-2"
 author: "Rob Challen"
 date: "24/06/2022"
 output: html_document
+knit: ggrrr::knit_versioned("html","output/omicron-severe-disease-suppl")
 ---
 
 ```{r setup, include=FALSE}
@@ -18,17 +19,14 @@ here::i_am("vaccine-effectiveness/waning-immunity.Rmd")
 # common-setup will attempt to load all the dependencies including 
 # ggrrr and dtrackr.
 source(here::here("common-setup.R"))
+source(here::here("estimators.R"))
 
 # This creates a function that can be used to put all the outputs (like) a specific directory
 out = outputter(directory=here::here("output/vaccine-effectiveness"))
 
 ```
 
-## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
 ```{r cars}
 # serology = readr::read_csv(unz(here::here("input/week15_2022_seroprev_modellers.csv.zip")))
@@ -37,152 +35,254 @@ serology = serology %>% track()
 serology = serology %>% mutate(across(ends_with("date"), .fns = ~ as.Date(.x, "%d%b%Y")))
 
 ```
+# N-antibody community level
 
-## Including Plots
+* Log link age and date linear model.
+* Naturally acquired immunity
+
 ```{r}
-ggplot(serology %>% filter(!is.na(RocheS_units) & !is.na(RocheN_units)), aes(x=RocheS_units,y=RocheN_units, colour=secondvaccinationbrand))+geom_point()+scale_x_continuous(trans="log1p",breaks=ggrrr::breaks_log1p())+scale_y_continuous(trans="log1p",breaks=ggrrr::breaks_log1p())+
-  geom_vline(xintercept=c(275,2500),colour="red")
+model = locfit::locfit(RocheN_units ~locfit::lp(age,SampleDate,nn=0.2,scale=TRUE),data = serology, link="log")
+summary(model)
+new = tidyr::crossing(age = 25:85, SampleDate = .full_seq_dates(na.omit(serology$SampleDate)))
+res = predict(model,newdata = new)
+new = new %>% mutate(units = res)
+p1 = ggplot(new, aes(x=SampleDate,y=age,fill=units, z=units))+geom_tile()+scale_fill_viridis_c(option = "magma")+metR::geom_contour2(colour="white")
+p1 %>% ggrrr::gg_save_as(out("n-antibody-level"),size = std_size$half)
+```
 
-ggplot(serology %>% filter(!is.na(RocheS_units) & !is.na(RocheN_units)), aes(x=RocheS_units))+geom_density()+scale_x_continuous(trans="log1p")+
-  geom_vline(xintercept=c(275,2500),colour="red")
-ggplot(serology %>% filter(!is.na(RocheS_units) & !is.na(RocheN_units)), aes(x=RocheN_units))+geom_density()+scale_x_continuous(trans="log1p")
+# N antibody positivity
+
+* Not clear what level is of positivity
+* Binomial model with logit link function (i.e. logistic regression with locally fitted polynomial on age and date)
+
+
+```{r}
+serology2 = serology %>% mutate(RocheN_pos = RocheN_outcome == "Positive") %>% filter(!is.na(RocheN_pos))
+model = locfit::locfit(RocheN_pos ~ locfit::lp(age,SampleDate,nn=0.2,scale=TRUE),data = serology2, link="logit", family="qbinomial")
+
+new = tidyr::crossing(age = 25:85, SampleDate = .full_seq_dates(na.omit(serology$SampleDate)))
+res = predict(model,newdata = new)
+new = new %>% mutate(positives = res)
+p2 = ggplot(new, aes(x=SampleDate,y=age,fill=positives,z=positives))+geom_tile()+scale_fill_viridis_c(lim=c(0,1))+metR::geom_contour2(mapping = aes(z=positives,label = ..level..),colour="white", binwidth=0.1)
+p2 %>% ggrrr::gg_save_as(out("n-antibody-positivity"),size = std_size$half)
+```
+# N antibody positivity by vaccination status (at time of sample)
+
+* filters for any vaccine received prior to test.
+* Not fully vaccinated.
+
+```{r}
+serology_unvac = serology2 %>% filter(is.na(firstvaccinationdate))
+model = locfit::locfit(RocheN_pos ~ locfit::lp(age,SampleDate,nn=0.2,scale=TRUE),data = serology_unvac, link="logit", family="qbinomial")
+
+new = tidyr::crossing(age = 25:85, SampleDate = .full_seq_dates(na.omit(serology$SampleDate)))
+res = predict(model,newdata = new)
+new = new %>% mutate(positives = res) %>% mutate(status = "Unvaccinated")
+
+serology_vac = serology2 %>% filter(!is.na(firstvaccinationdate))
+model2 = locfit::locfit(RocheN_pos ~ locfit::lp(age,SampleDate,nn=0.2,scale=TRUE),data = serology_vac, link="logit", family="qbinomial")
+
+new2 = tidyr::crossing(age = 25:85, SampleDate = .full_seq_dates(na.omit(serology$SampleDate)))
+res = predict(model2,newdata = new2)
+new2 = new2 %>% mutate(positives = res) %>% mutate(status = "Vaccinated")
+
+new3 = bind_rows(new,new2)
+
+p3 = ggplot(new3, aes(x=SampleDate,y=age,fill=positives,z=positives))+geom_tile()+facet_wrap(vars(status))+
+  scale_fill_viridis_c(lim=c(0,1))+metR::geom_contour2(mapping = aes(z=positives,label = ..level..),colour="white", binwidth=0.1)
+
+p3 %>% ggrrr::gg_save_as(out("n-antibody-positivity-by-vaccination"),size = std_size$half)
+```
+
+# S antibody community level
+
+```{r}
+model2 = locfit::locfit(RocheS_units ~locfit::lp(age,SampleDate,nn=0.2,scale=TRUE),data = serology, link="log")
+new2 = tidyr::crossing(age = 25:85, SampleDate = .full_seq_dates(na.omit(serology$SampleDate)))
+res2 = predict(model2,newdata = new2)
+new2 = new2 %>% mutate(units = res2)
+p4 = ggplot(new2, aes(x=SampleDate,y=age,fill=units,z=units))+geom_tile()+scale_fill_viridis_c(option="magma")+metR::geom_contour2(colour="white")
+p4 %>% ggrrr::gg_save_as(out("s-antibody-level"),size = std_size$half)
+```
+# S antibody positivity
+
+* N.b. not sure what definition of positive is in this data.
+
+```{r}
+serology3 = serology %>% mutate(RocheS_pos = RocheS_outcome == "Positive") %>% filter(!is.na(RocheS_pos))
+model = locfit::locfit(RocheS_pos ~ locfit::lp(age,SampleDate,nn=0.2,scale=TRUE),data = serology3, link="logit", family="qbinomial")
+
+new = tidyr::crossing(age = 25:85, SampleDate = .full_seq_dates(na.omit(serology$SampleDate)))
+res = predict(model,newdata = new)
+new = new %>% mutate(positives = res)
+p5 = ggplot(new, aes(x=SampleDate,y=age,fill=positives))+geom_tile()+
+  scale_fill_viridis_c(lim=c(0,1))+metR::geom_contour2(mapping = aes(z=positives,label = ..level..),colour="white", binwidth=0.1)
+
+p5 %>% ggrrr::gg_save_as(out("s-antibody-positivity"),size = std_size$half)
+```
+
+# Only Vaccine induced immunity
+
+* S antibody positive and N antibody negative 
+* Immunity that is solely conferred by vaccine
+
+```{r}
+serology4 = serology %>% mutate(RocheS_only = RocheS_outcome == "Positive" & RocheN_outcome == "Negative") %>% filter(!is.na(RocheS_only))
+model = locfit::locfit(RocheS_only ~ locfit::lp(age,SampleDate,nn=0.2,scale=TRUE),data = serology4, link="logit", family="qbinomial")
+
+new = tidyr::crossing(age = 25:85, SampleDate = .full_seq_dates(na.omit(serology$SampleDate)))
+res = predict(model,newdata = new)
+new = new %>% mutate(positives = res)
+p6 = ggplot(new, aes(x=SampleDate,y=age,fill=positives,z=positives))+geom_tile()+
+  scale_fill_viridis_c(lim=c(0,1))+metR::geom_contour2(mapping = aes(z=positives,label = ..level..),colour="white", binwidth=0.1)
+
+p6 %>% ggrrr::gg_save_as(out("s-only-antibody-positivity"),size = std_size$half)
+```
+
+```{r}
+# ggplot(serology %>% filter(!is.na(RocheS_units) & !is.na(RocheN_units)), aes(x=RocheS_units,y=RocheN_units, colour=secondvaccinationbrand))+geom_point()+scale_x_continuous(trans="log1p",breaks=ggrrr::breaks_log1p())+scale_y_continuous(trans="log1p",breaks=ggrrr::breaks_log1p())+
+#   geom_vline(xintercept=c(275,2500),colour="red")
+# 
+# ggplot(serology %>% filter(!is.na(RocheS_units) & !is.na(RocheN_units)), aes(x=RocheS_units))+geom_density()+scale_x_continuous(trans="log1p")+
+#   geom_vline(xintercept=c(275,2500),colour="red")
+# ggplot(serology %>% filter(!is.na(RocheS_units) & !is.na(RocheN_units)), aes(x=RocheN_units))+geom_density()+scale_x_continuous(trans="log1p")
 ```
 
 
 ```{r}
-serology2 = serology %>% 
-  mutate(
-    dosesBeforeSample = case_when(
-      is.na(firstvaccinationdate) & is.na(secondvaccinationdate) & is.na(thirdvaccinationdate) ~ NA_character_,
-      SampleDate < firstvaccinationdate ~ "none",
-      is.na(secondvaccinationdate) | SampleDate < secondvaccinationdate ~ "one",
-      is.na(thirdvaccinationdate) | SampleDate < thirdvaccinationdate ~ "two",
-      TRUE ~ "three",
-    ) %>% factor(levels=c("none","one","two","three")),
-    lastDoseBeforeDate = case_when(
-      is.na(firstvaccinationdate) & is.na(secondvaccinationdate) & is.na(thirdvaccinationdate) ~ NA_Date_,
-      SampleDate < firstvaccinationdate ~ NA_Date_,
-      is.na(secondvaccinationdate) | SampleDate < secondvaccinationdate ~ firstvaccinationdate,
-      is.na(thirdvaccinationdate) | SampleDate < thirdvaccinationdate ~ secondvaccinationdate,
-      TRUE ~ thirdvaccinationdate
-    ),
-    ageCat = cut(age,breaks = c(35,65,75,Inf), labels = c("35-64","65-74","75+"),right = FALSE),
-    postDoseInterval = as.integer(SampleDate-lastDoseBeforeDate)
-  )
-
-serology2 = serology2 %>% mutate(test = "RocheS_units", value=RocheS_units)
-  # pivot_longer(ends_with("units"), names_to="test")
+# serology2 = serology %>% 
+#   mutate(
+#     dosesBeforeSample = case_when(
+#       is.na(firstvaccinationdate) & is.na(secondvaccinationdate) & is.na(thirdvaccinationdate) ~ NA_character_,
+#       SampleDate < firstvaccinationdate ~ "none",
+#       is.na(secondvaccinationdate) | SampleDate < secondvaccinationdate ~ "one",
+#       is.na(thirdvaccinationdate) | SampleDate < thirdvaccinationdate ~ "two",
+#       TRUE ~ "three",
+#     ) %>% factor(levels=c("none","one","two","three")),
+#     lastDoseBeforeDate = case_when(
+#       is.na(firstvaccinationdate) & is.na(secondvaccinationdate) & is.na(thirdvaccinationdate) ~ NA_Date_,
+#       SampleDate < firstvaccinationdate ~ NA_Date_,
+#       is.na(secondvaccinationdate) | SampleDate < secondvaccinationdate ~ firstvaccinationdate,
+#       is.na(thirdvaccinationdate) | SampleDate < thirdvaccinationdate ~ secondvaccinationdate,
+#       TRUE ~ thirdvaccinationdate
+#     ),
+#     ageCat = cut(age,breaks = c(35,65,75,Inf), labels = c("35-64","65-74","75+"),right = FALSE),
+#     postDoseInterval = as.integer(SampleDate-lastDoseBeforeDate)
+#   )
+# 
+# serology2 = serology2 %>% mutate(test = "RocheS_units", value=RocheS_units)
+#   # pivot_longer(ends_with("units"), names_to="test")
 ```
 
 ```{r pressure, echo=FALSE}
-ggplot(serology2 %>% filter(!is.na(value) & !is.na(dosesBeforeSample) & !is.na(ageCat) & RocheN_units < 1), aes(x=postDoseInterval, y=value, colour=RocheN_units))+geom_point()+facet_wrap(vars(dosesBeforeSample,test),scales = "free_y")+scale_y_log10()
+# ggplot(serology2 %>% filter(!is.na(value) & !is.na(dosesBeforeSample) & !is.na(ageCat) & RocheN_units < 1), aes(x=postDoseInterval, y=value, colour=RocheN_units))+geom_point()+facet_wrap(vars(dosesBeforeSample,test),scales = "free_y")+scale_y_log10()
 ```
 
 
 ```{r}
-quantiles = c(0.025,0.25,0.5,0.75,0.975)
-tmp = serology2  %>% filter(!is.na(value) & !is.na(dosesBeforeSample) & !is.na(ageCat) & RocheN_units < 1 & !is.na(postDoseInterval) & !is.na(ageCat))
-
-ggplot(tmp, aes(x=age,colour=secondvaccinationbrand))+geom_point(stat="count")+geom_line(stat="count")
-
-```
-
-```{r}
-any(is.na(tmp$postDoseInterval))
-
-window=15
-
-summaryLag = tmp %>% arrange(postDoseInterval) %>% 
-    group_by(dosesBeforeSample,ageCat) %>%
-    mutate(
-      rollingQuant = slider::slide_index(value, postDoseInterval, .before=window %/% 2,.after=window %/% 2,.complete = TRUE,.f = ~ enframe(quantile(.x, quantiles, na.rm=TRUE),value = "quant")),
-      rollingN = slider::slide_index_int(value, postDoseInterval, .before=window %/% 2,.after=window %/% 2,.complete = TRUE,.f = ~ length(.x)),
-      rollingMean = slider::slide_index_dbl(value, postDoseInterval, .before=window %/% 2,.after=window %/% 2,.complete = TRUE,.f = ~ mean(.x,na.rm=TRUE))
-    ) %>%
-    select(ageCat, dosesBeforeSample, postDoseInterval, rollingMean, rollingQuant, rollingN) %>%
-    unnest(rollingQuant) %>%
-    distinct()
-
-ggplot(summaryLag%>% filter(rollingN>20), aes(x=postDoseInterval, y=rollingN))+geom_line()+facet_wrap(vars(dosesBeforeSample,ageCat),scales = "free_y")+scale_y_log10()
-
-
-peakImmunity = summaryLag %>% group_by(dosesBeforeSample,ageCat) %>% filter(rollingN>50 & name == "50%") %>% mutate(maxPostDoseInterval = max(postDoseInterval)) %>%    
-  # filter(log(quant)>0.95*max(log(quant))) %>%
-  filter(rollingMean>0.95*max(rollingMean)) %>% 
-  filter(postDoseInterval==min(postDoseInterval)) %>% select(ageCat, dosesBeforeSample, peakImmunityDays = postDoseInterval, medianPeak = quant, meanPeak = rollingMean, maxPostDoseInterval)
-
-ggplot(summaryLag %>% filter(rollingN>30 & postDoseInterval<200), aes(x=postDoseInterval, y=quant, colour=name))+geom_line()+facet_grid(dosesBeforeSample~ageCat,scales = "free_y")+scale_y_log10()+
-  geom_vline(data = peakImmunity, aes(xintercept=peakImmunityDays), colour="grey")+
-  geom_point(data = peakImmunity, aes(x=peakImmunityDays, y = meanPeak), colour="black", size=1)
-```
-
-
-```{r}
-
-serology3 = serology2 %>% inner_join(peakImmunity, by=c("dosesBeforeSample","ageCat")) %>% filter(postDoseInterval < maxPostDoseInterval) %>% mutate(prePeak = postDoseInterval <= peakImmunityDays, peakOffset = postDoseInterval-peakImmunityDays, normalisedValue = value/meanPeak)
-
-tmp = serology3 %>% filter(dosesBeforeSample %in% c("two","three")) %>% mutate(
-  dosesBeforeSample = forcats::fct_drop(dosesBeforeSample),
-  ageCat = forcats::fct_drop(ageCat)
-)
-
-
-
-tmp2 = tmp %>% filter(peakOffset >= 14 & peakOffset < 100 & (value < 2495 | value > 2505)) %>% group_by(dosesBeforeSample, ageCat, peakImmunityDays) %>% group_modify(function(d,g,...) {
-  d$init = 1
-  # fit <- glm(normalisedValue ~ peakOffset-1+offset(init), data=d, family=gaussian(link=log))
-  fit <- glm(value ~ peakOffset, data=d, family=gaussian(link=log))
-  predict = predict(fit,newdata=tibble(peakOffset=c(-14:150)),se.fit=TRUE)
-  return(tibble(
-    sample=list(d), fit= list(fit), 
-    predict=list(tibble(
-      peakOffset=c(-14:150),
-      value = predict$fit,
-      se = predict$se.fit
-    ))))
-})
-
-tmp3 = tmp2 %>% mutate(coef = map(fit, ~ broom::tidy(.x)))
-tmp4 = tmp3 %>% select(dosesBeforeSample, coef) %>% unnest(coef)
-
-
-ggplot(tmp, aes(x=peakOffset, y=value))+geom_point()+geom_vline(colour="red",xintercept=0)+facet_grid(dosesBeforeSample~ageCat,scales = "free_y")+scale_y_log10()+
-  geom_ribbon(data=tmp2 %>% unnest(predict), aes(x=peakOffset, ymin =exp(value-1.96*se),ymax =exp(value+1.96*se)),fill="blue",alpha=0.2)+
-  geom_line(data=tmp2 %>% unnest(predict), aes(x=peakOffset, y =exp(value)),colour="blue",size=1)
-
+# quantiles = c(0.025,0.25,0.5,0.75,0.975)
+# tmp = serology2  %>% filter(!is.na(value) & !is.na(dosesBeforeSample) & !is.na(ageCat) & RocheN_units < 1 & !is.na(postDoseInterval) & !is.na(ageCat))
+# 
+# ggplot(tmp, aes(x=age,colour=secondvaccinationbrand))+geom_point(stat="count")+geom_line(stat="count")
 
 ```
 
 ```{r}
-ggplot(tmp4 %>% filter(term=="(Intercept)"), aes(x=dosesBeforeSample, colour=ageCat,y=exp(estimate), ymin=exp(estimate-1.96*std.error), ymax=exp(estimate+1.96*std.error)))+geom_point(position=position_dodge(width=0.6))+geom_errorbar(position=position_dodge(width=0.6),width=0.5)+
-  geom_hline(yintercept=1,colour="black")+ylab("peak units")+xlab("doses received")
+# any(is.na(tmp$postDoseInterval))
+# 
+# window=15
+# 
+# summaryLag = tmp %>% arrange(postDoseInterval) %>% 
+#     group_by(dosesBeforeSample,ageCat) %>%
+#     mutate(
+#       rollingQuant = slider::slide_index(value, postDoseInterval, .before=window %/% 2,.after=window %/% 2,.complete = TRUE,.f = ~ enframe(quantile(.x, quantiles, na.rm=TRUE),value = "quant")),
+#       rollingN = slider::slide_index_int(value, postDoseInterval, .before=window %/% 2,.after=window %/% 2,.complete = TRUE,.f = ~ length(.x)),
+#       rollingMean = slider::slide_index_dbl(value, postDoseInterval, .before=window %/% 2,.after=window %/% 2,.complete = TRUE,.f = ~ mean(.x,na.rm=TRUE))
+#     ) %>%
+#     select(ageCat, dosesBeforeSample, postDoseInterval, rollingMean, rollingQuant, rollingN) %>%
+#     unnest(rollingQuant) %>%
+#     distinct()
+# 
+# ggplot(summaryLag%>% filter(rollingN>20), aes(x=postDoseInterval, y=rollingN))+geom_line()+facet_wrap(vars(dosesBeforeSample,ageCat),scales = "free_y")+scale_y_log10()
+# 
+# 
+# peakImmunity = summaryLag %>% group_by(dosesBeforeSample,ageCat) %>% filter(rollingN>50 & name == "50%") %>% mutate(maxPostDoseInterval = max(postDoseInterval)) %>%    
+#   # filter(log(quant)>0.95*max(log(quant))) %>%
+#   filter(rollingMean>0.95*max(rollingMean)) %>% 
+#   filter(postDoseInterval==min(postDoseInterval)) %>% select(ageCat, dosesBeforeSample, peakImmunityDays = postDoseInterval, medianPeak = quant, meanPeak = rollingMean, maxPostDoseInterval)
+# 
+# ggplot(summaryLag %>% filter(rollingN>30 & postDoseInterval<200), aes(x=postDoseInterval, y=quant, colour=name))+geom_line()+facet_grid(dosesBeforeSample~ageCat,scales = "free_y")+scale_y_log10()+
+#   geom_vline(data = peakImmunity, aes(xintercept=peakImmunityDays), colour="grey")+
+#   geom_point(data = peakImmunity, aes(x=peakImmunityDays, y = meanPeak), colour="black", size=1)
+```
 
-ggplot(tmp4 %>% filter(term=="peakOffset"), aes(x=dosesBeforeSample, colour=ageCat,y=estimate, ymin=estimate-1.96*std.error, ymax=estimate+1.96*std.error))+geom_point(position=position_dodge(width=0.6))+geom_errorbar(position=position_dodge(width=0.6),width=0.5)+
-  geom_hline(yintercept=0,colour="black")+ylab("rate of change of log(units) per day")+xlab("doses received")
+
+```{r}
+# 
+# serology3 = serology2 %>% inner_join(peakImmunity, by=c("dosesBeforeSample","ageCat")) %>% filter(postDoseInterval < maxPostDoseInterval) %>% mutate(prePeak = postDoseInterval <= peakImmunityDays, peakOffset = postDoseInterval-peakImmunityDays, normalisedValue = value/meanPeak)
+# 
+# tmp = serology3 %>% filter(dosesBeforeSample %in% c("two","three")) %>% mutate(
+#   dosesBeforeSample = forcats::fct_drop(dosesBeforeSample),
+#   ageCat = forcats::fct_drop(ageCat)
+# )
+# 
+# 
+# 
+# tmp2 = tmp %>% filter(peakOffset >= 14 & peakOffset < 100 & (value < 2495 | value > 2505)) %>% group_by(dosesBeforeSample, ageCat, peakImmunityDays) %>% group_modify(function(d,g,...) {
+#   d$init = 1
+#   # fit <- glm(normalisedValue ~ peakOffset-1+offset(init), data=d, family=gaussian(link=log))
+#   fit <- glm(value ~ peakOffset, data=d, family=gaussian(link=log))
+#   predict = predict(fit,newdata=tibble(peakOffset=c(-14:150)),se.fit=TRUE)
+#   return(tibble(
+#     sample=list(d), fit= list(fit), 
+#     predict=list(tibble(
+#       peakOffset=c(-14:150),
+#       value = predict$fit,
+#       se = predict$se.fit
+#     ))))
+# })
+# 
+# tmp3 = tmp2 %>% mutate(coef = map(fit, ~ broom::tidy(.x)))
+# tmp4 = tmp3 %>% select(dosesBeforeSample, coef) %>% unnest(coef)
+# 
+# 
+# ggplot(tmp, aes(x=peakOffset, y=value))+geom_point()+geom_vline(colour="red",xintercept=0)+facet_grid(dosesBeforeSample~ageCat,scales = "free_y")+scale_y_log10()+
+#   geom_ribbon(data=tmp2 %>% unnest(predict), aes(x=peakOffset, ymin =exp(value-1.96*se),ymax =exp(value+1.96*se)),fill="blue",alpha=0.2)+
+#   geom_line(data=tmp2 %>% unnest(predict), aes(x=peakOffset, y =exp(value)),colour="blue",size=1)
 
 
-tmp5 = tmp4 %>% filter(term=="peakOffset") %>% mutate(halflife = log(0.5)/estimate, halflife_lo = log(0.5)/(estimate+1.96*std.error), halflife_hi=log(0.5)/(estimate-1.96*std.error))
+```
 
-ggplot(tmp5, aes(x=dosesBeforeSample, colour=ageCat,y=halflife, ymin=halflife_lo, ymax=halflife_hi))+geom_point(position=position_dodge(width=0.6))+geom_errorbar(position=position_dodge(width=0.6),width=0.5)+
-  geom_hline(yintercept=0,colour="black")+ylab("half life (days)")+xlab("doses received")+coord_cartesian(ylim=c(-10,250))
-
-
-tmp4 %>% select(-statistic, -p.value) %>% pivot_wider(names_from = term,values_from=c(estimate, std.error)) %>% 
-  mutate(
-    halflife = log(0.5)/estimate_peakOffset, 
-    halflife_lo = log(0.5)/(estimate_peakOffset+1.96*std.error_peakOffset), 
-    halflife_hi=log(0.5)/(estimate_peakOffset-1.96*std.error_peakOffset),
-    `Half life (days)` = sprintf("%1.1f [%1.1f \u2015 %1.1f]", halflife, halflife_lo, halflife_hi)
-  ) %>% 
-  mutate(
-    `Peak level (Units)` = sprintf("%s [%s \u2015 %s]", 
-                                   signif(exp(`estimate_(Intercept)`),3), 
-                                   signif(exp(`estimate_(Intercept)`-1.96*`std.error_(Intercept)`),3), 
-                                   signif(exp(`estimate_(Intercept)`+1.96*`std.error_(Intercept)`),3))
-  ) %>%
-  select("Doses" = dosesBeforeSample, "Age category"=ageCat,"Days to peak"=peakImmunityDays,`Peak level (Units)`, `Half life (days)`) %>%
-  ggrrr::hux_tidy(rowGroupVars = vars(Doses,`Age category`), colGroupVars = vars()) %>%
-  clipr::write_clip()
+```{r}
+# ggplot(tmp4 %>% filter(term=="(Intercept)"), aes(x=dosesBeforeSample, colour=ageCat,y=exp(estimate), ymin=exp(estimate-1.96*std.error), ymax=exp(estimate+1.96*std.error)))+geom_point(position=position_dodge(width=0.6))+geom_errorbar(position=position_dodge(width=0.6),width=0.5)+
+#   geom_hline(yintercept=1,colour="black")+ylab("peak units")+xlab("doses received")
+# 
+# ggplot(tmp4 %>% filter(term=="peakOffset"), aes(x=dosesBeforeSample, colour=ageCat,y=estimate, ymin=estimate-1.96*std.error, ymax=estimate+1.96*std.error))+geom_point(position=position_dodge(width=0.6))+geom_errorbar(position=position_dodge(width=0.6),width=0.5)+
+#   geom_hline(yintercept=0,colour="black")+ylab("rate of change of log(units) per day")+xlab("doses received")
+# 
+# 
+# tmp5 = tmp4 %>% filter(term=="peakOffset") %>% mutate(halflife = log(0.5)/estimate, halflife_lo = log(0.5)/(estimate+1.96*std.error), halflife_hi=log(0.5)/(estimate-1.96*std.error))
+# 
+# ggplot(tmp5, aes(x=dosesBeforeSample, colour=ageCat,y=halflife, ymin=halflife_lo, ymax=halflife_hi))+geom_point(position=position_dodge(width=0.6))+geom_errorbar(position=position_dodge(width=0.6),width=0.5)+
+#   geom_hline(yintercept=0,colour="black")+ylab("half life (days)")+xlab("doses received")+coord_cartesian(ylim=c(-10,250))
+# 
+# 
+# tmp4 %>% select(-statistic, -p.value) %>% pivot_wider(names_from = term,values_from=c(estimate, std.error)) %>% 
+#   mutate(
+#     halflife = log(0.5)/estimate_peakOffset, 
+#     halflife_lo = log(0.5)/(estimate_peakOffset+1.96*std.error_peakOffset), 
+#     halflife_hi=log(0.5)/(estimate_peakOffset-1.96*std.error_peakOffset),
+#     `Half life (days)` = sprintf("%1.1f [%1.1f \u2015 %1.1f]", halflife, halflife_lo, halflife_hi)
+#   ) %>% 
+#   mutate(
+#     `Peak level (Units)` = sprintf("%s [%s \u2015 %s]", 
+#                                    signif(exp(`estimate_(Intercept)`),3), 
+#                                    signif(exp(`estimate_(Intercept)`-1.96*`std.error_(Intercept)`),3), 
+#                                    signif(exp(`estimate_(Intercept)`+1.96*`std.error_(Intercept)`),3))
+#   ) %>%
+#   select("Doses" = dosesBeforeSample, "Age category"=ageCat,"Days to peak"=peakImmunityDays,`Peak level (Units)`, `Half life (days)`) %>%
+#   ggrrr::hux_tidy(rowGroupVars = vars(Doses,`Age category`), colGroupVars = vars()) %>%
+#   clipr::write_clip()
 
 
 ```

@@ -43,15 +43,20 @@ options(use.wilcoxon=TRUE)
 
 ```{r F1_materials_flowchart}
 avoncap_raw = load_data("DeltaVE") 
-avoncap_raw %>% save_data_source_info()
+avoncap_raw %>% save_data_source_info(out)
 
 
-avoncap_original = avoncap_raw %>% normalise_data() 
+avoncap_original = avoncap_raw %>%
+  normalise_data() %>% 
+  augment_data() %>% 
+  avoncap_calculate_qcovid()
+
 avoncap_variants_data = avoncap_original %>% avoncap_variants()
 v=avoncap_variants_data %>% get_value_sets()
 # Analysis specific 
 raw_data  = avoncap_variants_data  
-raw_data %>% excluded() %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
+excluded = raw_data %>% excluded() 
+excluded %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
 
 raw_data %>% flowchart(filename = out("fig1-data-flow"))
 
@@ -61,6 +66,8 @@ raw_data = raw_data %>% untrack()
 * What details do we have about repeat admissions?
 * Interval for repeat admissions shorter for Delta, within 7 days. Maybe due to re-admission only counting after 30 days?
 * Vaccination in re-admissions follows other patterns
+
+
 
 ```{r cut_off_analysis}
 # why did we chose these specific outcomes:
@@ -81,7 +88,7 @@ raw_data = raw_data %>% untrack()
 # p2 = ggplot(tmp, aes(x=day_7.max_o2_level, y=mean*100, ymin=lower*100, ymax=upper*100,fill=genomic.variant_inferred,colour=genomic.variant_inferred))+
 #   geom_bar(stat="identity",position=position_dodge(width = 0.7),width=0.7, alpha=0.2)+
 #   geom_errorbar(colour="black", position=position_dodge(width = 0.7), width=0.5)+
-#   ylab("Cumulative proportion")+xlab("Max FiO\u2082 level less than or equal to")+
+#   ylab("Cumulative proportion")+xlab("Max FiO2 level less than or equal to")+
 #   scale_color_brewer(palette = "Dark2",name="",aesthetics = c("fill","colour"))
 # 
 # p = p1+p2+patchwork::plot_annotation(tag_levels = "A")+patchwork::plot_layout(guides = "collect")
@@ -122,7 +129,7 @@ tmp = raw_data %>% compare_population(
   demog.age,
   demog.gender,
   demog.ethnicity,
-  admission.BMI,
+  # admission.BMI,
   # admission.charlson_comorbidity_index,
   admission.cci_category,
   qcovid2.hazard_ratio,
@@ -262,6 +269,7 @@ p %>% gg_save_as(out("fig2-timeline"), size = std_size$half)
 * Complex interaction between vaccination and variant in terms of severe outcomes
 
 ```{r F3_outcome,fig.cap="Outcome indicators on day 7 and stratified by vaccination status"}
+
 plots = avoncap_variants_data %>% plot_population(populationVar = genomic.variant_inferred, comparisonVars = vars(
   day_7.max_o2_level,
   day_7.WHO_clinical_progression,
@@ -269,7 +277,7 @@ plots = avoncap_variants_data %>% plot_population(populationVar = genomic.varian
   
 )) %>% lapply(function(x) x+gg_set_X_angle(45))
 
-p1 = raw_data %>% plot_outcome(day_7.max_o2_gt_28 == v$day_7.max_o2_gt_28$`over 28%`,"% on >28% FiO\u2082",stratifyBy = demog.age_category)+gg_hide_legend()+gg_set_X_angle(45)
+p1 = raw_data %>% plot_outcome(day_7.max_o2_gt_28 == v$day_7.max_o2_gt_28$`over 28%`,"% on >28% FiO2",stratifyBy = demog.age_category)+gg_hide_legend()+gg_set_X_angle(45)
 p2 = raw_data %>% plot_outcome(day_7.WHO_score_gt_5 == v$day_7.WHO_score_gt_5$`WHO score 6-10`,"% with WHO Outcome > 5",stratifyBy = demog.age_category)+gg_hide_legend()+gg_set_X_angle(45)
 p3 = raw_data %>% plot_outcome(day_7.los_gt_3 == v$day_7.los_gt_3$`LOS>3 days`,"% with LOS > 3 days",stratifyBy = demog.age_category)+gg_hide_legend()+gg_set_X_angle(45)
 
@@ -311,7 +319,6 @@ allFeatures = expr(c(
   demog.care_home_resident,
   demog.imd_decile,
   admission.duration_symptoms,
-  admin.hospital,
   admission.week_no
 ))
 
@@ -452,8 +459,8 @@ captions = list(
 )
 
 footnotes = list(
-  table1 = "BMI, body mass index; bp, blood pressure; CCI, charlson comorbidity index; CXR, chest Xray; IMD, index multiple deprivation; ivdu, intravenous drug usage; sd, standard deviation; T, temperature",
-  table2 = "BMI, body mass index; bp, blood pressure; CCI, charlson comorbidity index; CXR, chest Xray; IMD, index multiple deprivation; ivdu, intravenous drug usage; no, number; sd, standard deviation; T, temperature",
+  table1 = "bp, blood pressure; CCI, charlson comorbidity index; CXR, chest Xray; IMD, index multiple deprivation; ivdu, intravenous drug usage; sd, standard deviation; T, temperature",
+  table2 = "bp, blood pressure; CCI, charlson comorbidity index; CXR, chest Xray; IMD, index multiple deprivation; ivdu, intravenous drug usage; no, number; sd, standard deviation; T, temperature",
   table3 = NULL,
   table4 = "CCI, charlson comorbidity index; RR, relative risk",
   table5 = "AIC, Akiake information criterion; BIC, Baeysian information criteria; RMSE, root mean squared error"
@@ -462,7 +469,7 @@ footnotes = list(
 
 ```
 
-# Outcome by outxcome regression models
+# Outcome by outcome regression models
 
 * Short list:
 * Univariate models: outcome versus each of the individual features
@@ -484,7 +491,7 @@ baseCCI = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + d
 baseRockwood = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + demog.age_category + admission.rockwood_score")
 baseQCovid = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + qcovid2.log_hazard") #spines::ns(qcovid2.log_hazard,3)") This is how to do the non linear terms
 
-additional = as.formula("~ . + demog.gender + demog.ethnicity + admission.on_immunosuppression + demog.care_home_resident + admission.duration_symptoms + admin.hospital + admission.week_no")
+additional = as.formula("~ . + demog.gender + demog.ethnicity + admission.on_immunosuppression + demog.care_home_resident + admission.duration_symptoms + admission.week_no")
 
 crossCCIcat = as.formula(". ~ genomic.variant_inferred * vaccination.vaccination + demog.age_category + admission.cci_category")
 nonLinQCovid = as.formula(". ~ genomic.variant_inferred + vaccination.vaccination + spines::ns(qcovid2.log_hazard,3)")
@@ -567,7 +574,7 @@ tmp3 = run_regressions("day_7.los_gt_3", robust_poisson, outcome = "of length of
 
 multiConfig = tibble::tribble(
   ~modelName, ~form,
-  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+  "Max FiO2>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
   "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(baseCCIcat),
   "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(baseCCIcat),
 )
@@ -584,7 +591,7 @@ multivModels = imputed %>% run_models(multiConfig,robust_poisson) # anova does n
 # Put univariate and multivariate in same table
 # this is table 2?
 h2 = multivModels %>% 
-  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
   summarise_boots(predictors,"RR")
 
 h2 %>% 
@@ -606,7 +613,7 @@ h2 %>%
 ```{r S13_combined_models_performance metrics}
 
 multivModels %>% 
-  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
   analyse_performance(statistics = NULL) %>% 
   sup$add_table(
     caption="The performance of parsimonious robust poisson regression models for the comparison of the three binary outcomes of maximal FiO2>28%, any ICU admission and length of stay >3 days assessed at day 7 of admission. The Akiake information criterion, AIC, and Baeysian information criteria, BIC, describe the information lost by the model and lower numbers are better. Tjur's R2 coefficient of determination is a psuedo R^2 meausure where higher numbers are better. RMSE is root mean squared error and Sigma is the residual standard deviation, a measure of the remaining unexpained variation in the data.",
@@ -628,9 +635,9 @@ predictors2 = c("genomic.variant_inferred","vaccination.vaccination","demog.age_
 
 # TODO: look at making this re-useable
 #forest = multivModels %>% forestplot_boots(predictors)
-out1 = multivModels2 %>% mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% combine_boots(predictors2)
-# out1 = multivModels %>% mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% combine_boots(predictors2)
-perf = multivModels %>% mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% pool_performance(statistics = c("AIC","BIC","R2_Tjur","R2_Nagelkerke","RMSE","Sigma"))
+out1 = multivModels2 %>% mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","WHO Outcome score>5","LOS>3 days"))) %>% combine_boots(predictors2)
+# out1 = multivModels %>% mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","WHO Outcome score>5","LOS>3 days"))) %>% combine_boots(predictors2)
+perf = multivModels %>% mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","WHO Outcome score>5","LOS>3 days"))) %>% pool_performance(statistics = c("AIC","BIC","R2_Tjur","R2_Nagelkerke","RMSE","Sigma"))
 
 out2 = out1 %>% 
   group_by(group) %>%
@@ -682,9 +689,28 @@ p1 = ggplot(longer, aes(y=y, x=x,xmin=xmin,xmax=xmax,colour=modelName))+
   gg_hide_legend()+
   gg_set_X_angle(0)+
   labs(caption="\u2020\u2020\u2020 indicates p-value < 0.001, \u2020\u2020 p-value < 0.01 and \u2020 p-value < 0.05. 'ns' have p-value \u2265 0.05")
-  
-if (longer %>% filter(label==as.character(group) & !is.na(p.value)) %>% nrow() > 0)
+
+p1_alt = ggplot(longer, aes(y=y, x=x,xmin=xmin,xmax=xmax,colour=modelName))+
+  geom_tile(mapping=aes(fill=as.character(g),x=1),width=Inf,colour=NA)+
+  geom_point(position=ggstance::position_dodgev(height=0.5,preserve = "total"),size=0.4)+
+  geom_errorbarh(position=ggstance::position_dodgev(height=0.5,preserve = "total"),height=0.4)+ 
+  scale_x_log10(breaks = c(0.25,0.5,1,2,4)) +
+  coord_cartesian(xlim=c(0.25,4))+
+  geom_vline(xintercept = 1)+
+  geom_text(data = longer %>% select(y,modelName,subgroup,label,statistic) %>% distinct(), mapping=aes(y=y,x=1.05,label=ifelse(!is.na(subgroup) & statistic=="ref","ref",NA)),inherit.aes = FALSE,size=gg_label_size(5),hjust=0,colour="black")+
+  geom_point(data = longer %>% select(y,modelName,subgroup,label,statistic) %>% filter(!is.na(subgroup) & statistic=="ref") %>% distinct(), mapping=aes(y=y,x=1),inherit.aes = FALSE,colour="black")+
+  gg_hide_Y_axis()+
+  xlab(statistic_label)+
+  scale_fill_manual(values = c("0"="grey90","1"="white"), guide="none")+
+  scale_color_brewer(palette = "Dark2")+
+  facet_wrap(vars(modelName))+
+  gg_hide_legend()+
+  gg_set_X_angle(0)
+
+if (longer %>% filter(label==as.character(group) & !is.na(p.value)) %>% nrow() > 0) {
   p1 = p1+geom_text(data = longer %>% filter(label==as.character(group) & !is.na(p.value)) %>% mutate(label=paste0("(p: ",p.value,")")), mapping=aes(y=y,x=4,label=label),inherit.aes = FALSE,size=gg_label_size(5),hjust=1,colour="black")
+  p1_alt = p1_alt+geom_text(data = longer %>% filter(label==as.character(group) & !is.na(p.value)) %>% mutate(label=paste0("(p: ",p.value,")")), mapping=aes(y=y,x=4,label=label),inherit.aes = FALSE,size=gg_label_size(5),hjust=1,colour="black")
+}
 
 p2 = ggplot(longer %>% select(y,g,label_x,label) %>% distinct(),aes(y=y))+
   geom_tile(mapping=aes(fill=as.character(g),x=1),width=Inf,colour=NA)+
@@ -706,11 +732,12 @@ p4 = ggplot(perf2, aes(y=y,label=value,x=0))+
   facet_wrap(vars(modelName))+gg_hide_X_axis()+gg_hide_Y_axis()+theme(axis.ticks.x = element_blank(), panel.grid = element_blank(), strip.text = element_blank(), strip.background = element_blank())
 
 p = p2+p1+patchwork::plot_layout(ncol=2,nrow=1,widths = c(2.5,10))
-
 p %>% gg_save_as(out("fig4-forest-plot"), size = std_size$third)
 
-p = p2+p1+p3+p4+patchwork::plot_layout(ncol=2,nrow=2,widths = c(2.5,10),heights = c(10,3))
+p = p2+p1_alt+patchwork::plot_layout(ncol=2,nrow=1,widths = c(2.5,10))
+p %>% gg_save_as(out("fig4-forest-plot-no-p-indicator"), size = std_size$third)
 
+p = p2+p1+p3+p4+patchwork::plot_layout(ncol=2,nrow=2,widths = c(2.5,10),heights = c(10,3))
 p %>% gg_save_as(out("fig4-forest-plot-with-gof"), size = std_size$half)
 
 ```
@@ -725,7 +752,7 @@ p %>% gg_save_as(out("fig4-forest-plot-with-gof"), size = std_size$half)
 
 multiConfig = tibble::tribble(
   ~modelName, ~form,
-  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(crossCCIcat),
+  "Max FiO2>28%", (day_7.max_o2_gt_28 ~ .) %>% update(crossCCIcat),
   "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(crossCCIcat),
   "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(crossCCIcat),
 )
@@ -739,7 +766,7 @@ multivModels = imputed %>% run_models(multiConfig, robust_poisson)
 # Put univariate and multivariate in same table
 # this is table 2?
 h2 = multivModels %>% 
-  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
   summarise_boots(predictors,"RR")
 
 h2 %>% 
@@ -767,16 +794,16 @@ h2 %>%
 
 multiConfig = tibble::tribble(
   ~modelName, ~form,
-  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
-  "Max FiO\u2082>35%", (day_7.max_o2_gt_35 ~ .) %>% update(baseCCIcat),
-  "Max FiO\u2082>50%", (day_7.max_o2_gt_50 ~ .) %>% update(baseCCIcat),
+  "Max FiO2>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+  "Max FiO2>35%", (day_7.max_o2_gt_35 ~ .) %>% update(baseCCIcat),
+  "Max FiO2>50%", (day_7.max_o2_gt_50 ~ .) %>% update(baseCCIcat),
 )
 
 predictors = multiConfig$form %>% lapply(function(f) all.vars(rlang::f_rhs(f))) %>% unlist() %>% unique() %>% lapply(as.symbol)
 multivModels = imputed %>% run_models(multiConfig, robust_poisson)
 
 h2 = multivModels %>% 
-  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","Max FiO\u2082>35%","Max FiO\u2082>50%"))) %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","Max FiO2>35%","Max FiO2>50%"))) %>% 
   summarise_boots(predictors,"RR")
 
 h2 %>% 
@@ -868,7 +895,7 @@ https://bmcmedresmethodol.biomedcentral.com/articles/10.1186/s12874-018-0519-5
 
 multiConfig = tibble::tribble(
   ~modelName, ~form,
-  "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+  "Max FiO2>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
   "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(baseCCIcat),
   "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(baseCCIcat),
 )
@@ -892,7 +919,7 @@ fullSensitivity = fullSensitivity %>% mutate(combined = purrr::map2(boots, estim
 h2 = fullSensitivity %>% select(-boots) %>% 
   unnest(combined) %>% 
   select(c(-starts_with("beta"),-type,-p.value)) %>% 
-  mutate(modelName = modelName %>% ordered(c("Max FiO\u2082>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
+  mutate(modelName = modelName %>% ordered(c("Max FiO2>28%","WHO Outcome score>5","LOS>3 days"))) %>% 
   rename(Characteristic = group, Group = subgroup, `Estimate Type`=estimateType, estimate = statistic, `P-value` = p.component) %>%
   hux_tidy(rowGroupVars = vars(Characteristic,Group,`Estimate Type`,method),colGroupVars = vars(modelName))
 
@@ -910,7 +937,7 @@ h2 %>%
 
 # multiConfig = tibble::tribble(
 #   ~modelName, ~form,
-#   "Max FiO\u2082>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
+#   "Max FiO2>28%", (day_7.max_o2_gt_28 ~ .) %>% update(baseCCIcat),
 #   "WHO Outcome score>5", (day_7.WHO_score_gt_5 ~ .) %>% update(baseCCIcat),
 #   "LOS>3 days", (day_7.los_gt_3 ~ .) %>% update(baseCCIcat),
 # )
@@ -934,6 +961,81 @@ h2 %>%
 # #     index=17)
 
 ```
+
+```{r S19_excluded_data}
+
+# N.b. shoudl be a better way of doing this but I calculated all the additional data points in the 
+
+full_data = bind_rows(
+  avoncap_original %>% semi_join(excluded %>% filter(.stage != "standard exclusions") %>% select(admin.record_number), by="admin.record_number") %>% mutate(status = "excluded"),
+  avoncap_original %>% semi_join(raw_data %>% ungroup() %>% select(admin.record_number), by="admin.record_number") %>% mutate(status = "included")
+)
+
+
+
+tmp = full_data %>% compare_population(
+  populationVar = status,
+  comparisonVars = vars(
+    genomic.variant_inferred,
+  demog.age,
+  demog.gender,
+  demog.ethnicity,
+  # admission.BMI,
+  # admission.charlson_comorbidity_index,
+  admission.cci_category,
+  qcovid2.hazard_ratio,
+  admission.on_immunosuppression
+  # These are the main outcomes:
+  # day_7.max_o2_gt_28,
+  # day_7.los_gt_3,
+  # day_7.WHO_score_gt_5
+  ))
+h = tmp %>% population_comparison_table(show_method = FALSE) 
+
+h %>% hux_auto_widths() %>%
+  huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) %>%
+  sup$add_table(
+    caption="Comparison of major demographic features between included and excluded cases. Vaccination status is not included as that is a criteria for exclusion.",
+    footnote = footnotes$table4,
+    index=19)
+  
+```
+
+```{r S20_inferred_variants}
+
+# N.b. shoudl be a better way of doing this but I calculated all the additional data points in the 
+
+inferred_variants = raw_data %>% mutate(inferred = ifelse(!is.na(genomic.variant_inferred) & is.na(genomic.variant),"variant inferred","variant known"))
+
+tmp = inferred_variants %>% compare_population(
+  populationVar = inferred,
+  comparisonVars = vars(
+    genomic.variant_inferred,
+  demog.age,
+  demog.gender,
+  demog.ethnicity,
+  # admission.BMI,
+  # admission.charlson_comorbidity_index,
+  admission.cci_category,
+  qcovid2.hazard_ratio,
+  vaccination.vaccination,
+  admission.on_immunosuppression
+  # These are the main outcomes:
+  # day_7.max_o2_gt_28,
+  # day_7.los_gt_3,
+  # day_7.WHO_score_gt_5
+  ))
+h = tmp %>% population_comparison_table(show_method = FALSE) 
+
+h %>% hux_auto_widths() %>%
+  huxtable::map_contents(huxtable::everywhere,huxtable::everywhere,huxtable::by_function(function(x) stringr::str_replace_all(x,fixed("."), "\u00B7"))) %>%
+  sup$add_table(
+    caption="Comparison of major demographic features between cases with inferred and known vaccination statuses. Inference is based on the two times, firstly before which there was no Omicron observed, and secondly after which there was no Delta observed. Inferred cases therefore have a strong temporal element to them and this leads to significant differences in the populations of the variant inferred and variant known categories that have no relevance to the study's findings, but mainly reflect the fact that more Omicron cases were inferred and hence inferred cases demonstrate the similar patterns as the main analysis.",
+    footnote = footnotes$table4,
+    index=20)
+  
+```
+
 
 
 ```{r write_supplementary_materials}

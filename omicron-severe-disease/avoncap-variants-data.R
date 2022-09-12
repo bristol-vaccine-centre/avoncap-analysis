@@ -4,9 +4,14 @@ avoncap_variants = function(avoncap_original = NULL) {
   
   if (is.null(avoncap_original)) {
     avoncap_raw = load_data() 
-    avoncap_original = avoncap_raw %>% normalise_data()
+    avoncap_original = avoncap_raw %>% 
+      normalise_data() %>% 
+      augment_data() %>% 
+      avoncap_calculate_qcovid()
   }
   
+  # Drop alpha and pre-alpha variant levels (not used in this analysis)
+  avoncap_original = avoncap_original %>% mutate(genomic.variant_inferred = genomic.variant_inferred %>% forcats::fct_drop())
   
   #filedate = format(as.Date(attr(avoncap_raw,"date")),"%d/%m/%Y")
   reproduce_at = as.Date(getOption("reproduce.at",default = Sys.Date()))
@@ -16,9 +21,7 @@ avoncap_variants = function(avoncap_original = NULL) {
   maxDelta = as.Date("2022-02-07") # tmp2 %>% filter(genomic.variant == "Delta") %>% summarise(max = max(admission.date)) %>% pull(max)
   minOmicron = as.Date("2021-11-07") # tmp2 %>% filter(genomic.variant == "Omicron") %>% summarise(min = min(admission.date)) %>% pull(min)
   
-  out = avoncap_original %>% 
-    augment_data() %>% 
-    avoncap_calculate_qcovid() 
+  out = avoncap_original 
   v = out %>% get_value_sets()
   
   out = out %>% 

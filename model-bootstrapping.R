@@ -227,18 +227,19 @@ oob_or = function(x, limit = 50) {
 
 combine_boots = function(boots, predictorVars) {
   keys = format_summary_rows(boots$impute[[1]], predictorVars)
-  
   pooled.HR = boots %>% unnest(model.coef) %>% group_by(modelName, term) %>% summarise(
     statistic.mixture = sprintf_list("%1.2f [%1.2f\u2013%1.2f]", oob_or(exp(qmixnorm(p=c(0.5,0.025,0.975), means=estimate, sds=std.error)))),
     beta.lower = qmixnorm(p=0.025, means=estimate, sds=std.error),
     beta.median = qmixnorm(p=0.5, means=estimate, sds=std.error),
     beta.upper = qmixnorm(p=0.975, means=estimate, sds=std.error),
-    p.value.mixture = scales::pvalue(mean(p.value))
+    p.value.mixture = scales::pvalue(.mean(p.value)),
+    .groups = "drop"
   )
   
   pooled.global.p = boots %>% unnest(global.p) %>% group_by(modelName, predictor) %>%
     summarise(
-      global.p.mixture = scales::pvalue(mean(`Pr(>Chisq)`)) 
+      global.p.mixture = scales::pvalue(.mean(`Pr(>Chisq)`)),
+      .groups = "drop"
     )
   
   out = keys %>% crossing(boots %>% select(modelName) %>% distinct()) %>% left_join(pooled.HR, by=c("term","modelName")) %>% left_join(pooled.global.p, by=c("predictor","modelName")) %>% 
@@ -255,7 +256,7 @@ combine_boots = function(boots, predictorVars) {
     )
 }
 
-
+.mean = function(x,...) suppressWarnings(mean(x,...))
 
 summarise_boots = function(boots, predictorVars, statistic="OR") {
   
@@ -275,7 +276,7 @@ pool_performance = function(boots, statistics = NULL) {
   pooled.performance = boots %>% 
     unnest(model.perf) %>% 
     group_by(modelName,statistic = name) %>% 
-    summarise(value = sprintf("%1.5g",mean(value)))
+    summarise(value = sprintf("%1.5g",.mean(value)),.groups = "drop")
   if (!is.null(statistics)) pooled.performance = pooled.performance %>% filter(statistic %in% statistics)
   pooled.performance
 }

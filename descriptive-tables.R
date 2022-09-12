@@ -73,7 +73,8 @@ compare_population = function(
           sd.value = sd(!!comp,na.rm = TRUE),
           median = quantile(!!comp,0.5,na.rm = TRUE),
           lqr = quantile(!!comp,0.25,na.rm = TRUE),
-          uqr = quantile(!!comp,0.75,na.rm = TRUE)
+          uqr = quantile(!!comp,0.75,na.rm = TRUE),
+          .groups = "drop"
         ) %>% 
         mutate(variable = variableName, variable.original = variableLabel) %>% 
         select(side,variable,variable.original,N,mean.value,sd.value,median,lqr,uqr)
@@ -103,8 +104,8 @@ compare_population = function(
           # browser()
           # abs(skew) is larger than expected for a normal at p = 0.05
           tryCatch({
-            maxSkew = avoncap_variants %>% group_by(side = !!populationVar) %>% summarise(skew = abs(e1071::skewness(!!comp, na.rm=TRUE,type=2)), size = n()) %>% 
-              mutate(skew95 = skew95(size)) %>% filter(skew/skew95 == max(skew/skew95))
+            maxSkew = avoncap_variants %>% group_by(side = !!populationVar) %>% summarise(skew = abs(e1071::skewness(!!comp, na.rm=TRUE,type=2)), size = n(),.groups = "drop") %>% 
+              mutate(skew95 = skew95(size)) %>% filter(skew/skew95 == suppressWarnings(max(skew/skew95)))
             message(as_label(comp),": max skew value is ",maxSkew$skew," versus expected 95% quantile ",maxSkew$skew95," on ",maxSkew$size," samples.")
             maxSkew$skew < maxSkew$skew95
           }, error = function(e) FALSE)
@@ -204,7 +205,7 @@ compare_population = function(
       
       compare_count = tmp %>%
         group_by(side, group) %>%
-        summarise(N = n()) %>%
+        summarise(N = n(),.groups = "drop") %>%
         ungroup() %>%
         tidyr::complete(side,group,fill=list(N=0)) %>%
         group_by(side) %>%
@@ -380,7 +381,8 @@ describe_population = function(
           mean.value = mean(!!comp,na.rm = TRUE),
           sd.value = sd(!!comp,na.rm = TRUE),
           value = sprintf("%1.3g \u00B1 %1.3g",mean.value,sd.value),
-          group=factor("(mean \u00B1 SD)")
+          group=factor("(mean \u00B1 SD)"),
+          .groups = "drop"
         ) %>% 
         mutate(variable = variableName, variable.original = variableLabel) %>% 
         select(variable,variable.original,group,N,value)
@@ -408,7 +410,7 @@ describe_population = function(
       
       compare_count = tmp %>%
         group_by(group) %>%
-        summarise(N = n()) %>%
+        summarise(N = n(),.groups = "drop") %>%
         ungroup() %>%
         tidyr::complete(group,fill=list(N=0)) %>%
         ungroup() %>%
@@ -500,7 +502,7 @@ compare_missingness = function(
   }
   out = compare_population(tmp,populationVar=!!populationVar,comparisonVars = comparisonVars,na.rm = TRUE, p.value=TRUE)
   out %>% complete(side,nesting(variable,variable.original),group, fill=list(N=0,p.value="\u2014")) %>% 
-    select(-c(value, p.value,p.method)) %>%
+    select(-c(value, p.value,p.method,alt.value)) %>%
     filter(group %in% c("missing","not missing")) %>%
     pivot_wider(values_from = N, names_from= group) %>%
     arrange(variable) %>%
@@ -563,7 +565,7 @@ plot_population = function(
       
       compare_count = avoncap_variants %>%
         group_by(!!populationVar, !!comp) %>%
-        summarise(N = n()) %>%
+        summarise(N = n(), .groups = "drop") %>%
         ungroup() %>%
         tidyr::complete(!!populationVar,!!comp,fill=list(N=0)) %>%
         group_by(!!populationVar) %>%
@@ -588,7 +590,7 @@ plot_rolling = function(avoncap_variants, factorVar, window=15) {
   factorVar = ensym(factorVar)
   rolling_genomics = avoncap_variants %>% filter(!is.na(!!factorVar)) %>% ungroup() %>% 
     mutate(!!factorVar := forcats::fct_drop(!!factorVar)) %>% 
-    group_by(!!!grps, !!factorVar, admission.date) %>% summarise(count = n()) %>%
+    group_by(!!!grps, !!factorVar, admission.date) %>% summarise(count = n(),.groups = "drop") %>%
     ungroup() %>% 
     tidyr::complete(tidyr::nesting(!!!grps),!!factorVar, admission.date = dates, fill=list(count=0)) %>%
     group_by(!!!grps, !!factorVar) %>% 
@@ -613,7 +615,7 @@ plot_outcome = function(avoncap_variants, outcomeExpr, label, colour="genomic.va
   colour = ensym(colour)
   avoncap_variant_count = avoncap_variants %>%
     group_by(!!colour, !!stratifyBy) %>%
-    summarise(binom::binom.confint(x=sum(na.omit(!!outcomeExpr)),n=n(),method="wilson"))
+    summarise(binom::binom.confint(x=sum(na.omit(!!outcomeExpr)),n=n(),method="wilson"),.groups = "drop")
   
   ggplot(avoncap_variant_count, aes(colour=!!colour, x=!!stratifyBy, y=mean*100, ymin=lower*100, ymax=upper*100))+
     geom_point(position=position_dodge(width=0.5))+
@@ -733,7 +735,7 @@ linelist_to_ts = function(df, dateVar= "date", ...) {
   newColFill = as.list(newColFill)
   newColFill$n = 0
   
-  tmp = df %>% group_by(!!dateVar) %>% summarise(!!!summaries, n=n()) %>% rename(.d := !!dateVar)
+  tmp = df %>% group_by(!!dateVar) %>% summarise(!!!summaries, n=n(),.groups = "drop") %>% rename(.d := !!dateVar)
   tmp = tmp %>% ungroup() %>% tidyr::complete(.d = dateRange, fill=newColFill) %>% arrange(.d) %>% rename(!!dateVar := .d)
   
   return(tmp)

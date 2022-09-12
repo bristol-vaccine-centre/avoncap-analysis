@@ -1,0 +1,331 @@
+---
+title: "Supporting materials"
+output: html_document
+knit: ggrrr::knit_versioned("html","output/omicron-severe-disease-suppl")
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+here::i_am("omicron-severe-disease/omicron-severe-disease-rr.Rmd")
+source(here::here("common-setup.R"))
+source(here::here("estimators.R"))
+out = ggrrr::outputter(directory=here::here("output/omicron-severe-disease-suppl"),datedSubdirectory = TRUE,datedFile = FALSE)
+
+ggrrr:::.this_script()
+
+```
+
+## Sanger lineage data
+
+* The sanger centre / COGUK citation
+* Sequencing background
+* Pango lineage background citation
+* WHO classification of lineages background
+
+
+```{r}
+
+raw_lineages = ggrrr::cache_download("https://covid-surveillance-data.cog.sanger.ac.uk/download/lineages_by_ltla_and_week.tsv",.stale = 7)
+
+variants = readr::read_tsv(raw_lineages,na = c("Lineage data suppressed","Unassigned"))
+
+lineage_keys = jsonlite::read_json("https://raw.githubusercontent.com/cov-lineages/pango-designation/master/pango_designation/alias_key.json")
+# filter out recombinant species
+lineage_keys = lineage_keys %>% magrittr::extract(lapply(.,length)==1)
+lineage_key_df = tibble(prefix = names(lineage_keys), expanded = unlist(unname(lineage_keys)))
+
+variants2 = variants %>% 
+  mutate(
+    prefix = Lineage %>% stringr::str_extract("^[A-Z]+"),
+    suffix = Lineage %>% stringr::str_sub(start = stringr::str_length(prefix)+1)
+  ) %>% 
+  left_join(lineage_key_df, by="prefix") %>%
+  mutate(full_tree = case_when(
+    !is.null(expanded) & expanded != "" ~ paste0(expanded,suffix),
+    TRUE ~ paste0(prefix,suffix)
+  )) %>%
+  mutate(
+    lineage_class = case_when(
+      is.na(Lineage) ~ "Unclassified",
+      full_tree %>% stringr::str_starts("B.1.1.7") ~ "Alpha (B.1.1.7)",
+      full_tree %>% stringr::str_starts("B.1.617.2.4") ~ "Delta (AY.4)",
+      full_tree %>% stringr::str_starts("B.1.617.2") ~ "Delta (B.1.617.2)",
+      full_tree %>% stringr::str_starts("B.1.1.529.1") ~ "Omicron (BA.1)",
+      full_tree %>% stringr::str_starts("B.1.1.529.2") ~ "Omicron (BA.2)",
+      full_tree %>% stringr::str_starts("B.1.1.529.4") ~ "Omicron (BA.4)",
+      full_tree %>% stringr::str_starts("B.1.1.529.5") ~ "Omicron (BA.5)",
+      # full_tree %>% stringr::str_starts("B.1.1.529") ~ "Omicron",
+      TRUE ~ "Other"
+    ),
+    who_class = case_when(
+      is.na(Lineage) ~ "Unclassified",
+      full_tree %>% stringr::str_starts("B.1.1.7") ~ "Alpha",
+      full_tree %>% stringr::str_starts("B.1.617.2") ~ "Delta",
+      full_tree %>% stringr::str_starts("B.1.1.529") ~ "Omicron",
+      TRUE ~ "Other"
+    )
+  ) #%>% select(-prefix,-suffix,-expanded)
+
+```
+
+```{r}
+# TODO: move this to data-raw / data when recreating as package
+# 
+# tribble(
+#   ~type, ~label, ~date,
+#   "min","Alpha", as.Date("2020-12-05"),
+#   "max","Wuhan", as.Date("2021-02-13"),
+#   "min","earliest Delta", as.Date("2021-05-15"),
+#   "max","Alpha", as.Date("2021-06-26"), # officially according to sanger but there were very low levels of Alpha 
+# maxAlpha = as.Date("2021-06-01") # unofficially this cutoff was used in the Delta Omicron paper.
+# # minOmicron = as.Date("2021-11-27") # according to sanger
+# minOmicron = as.Date("2021-11-07") # according to in hospital data
+# # maxDelta = as.Date("2022-01-15") # according to sanger
+# maxDelta = as.Date("2022-02-07") # according to in hospital results
+
+events = tribble(
+   ~type, ~label, ~date,
+   "event","start","2021-06-01",
+   "event","end","2022-03-28",
+   "event","delta inferred prior","2021-11-07",
+   "event","omicron inferred after","2022-02-07"
+) %>% mutate(date = as.Date(date))
+
+```
+
+```{r}  
+
+variants_uk = variants2 %>% 
+  group_by(WeekEndDate, lineage_class) %>% 
+  summarise(Count = sum(Count), .groups="drop")
+
+get_variant_model = function(variant_data, facet_name, form = class(lineage_class) + count(Count) ~ WeekEndDate) {
+  
+  tmp = as.epi_ts(variant_data, form ) 
+  ts = tmp %>% .normalise() %>% ungroup() 
+  tmp2 = ts %>% group_by(.time) %>% filter(sum(count)>0) %>% ungroup() 
+  tmp2 = tmp2 %>% select(class,count,.time) %>% pivot_wider(names_from = class, values_from = count)
+  
+  response = tmp2 %>% select(-.time) %>% as.matrix()
+  predictor = tmp2 %>% pull(.time)
+  
+  model = nnet::multinom(class_count ~ splines::bs(.time,degree=2), data = tibble(class_count=response,.time=predictor))
+  times = tibble(.time = .full_seq_times(predictor,1))
+  probs = bind_cols(times,as.data.frame(predict(model,newdata = times,type = "probs")))
+  # probs %>% glimpse()
+  plot_data = probs %>% pivot_longer(cols = -.time, names_to = "class", values_to = "probability") %>% 
+    mutate(date = .time_to_date(.time)) %>% 
+    # .denormalise(tmp %>% get_meta()) %>%
+    mutate(facet = facet_name)
+    
+  return(list(model=model,data=plot_data, ts = ts))
+}
+
+
+
+# tmp = as.epi_ts(variants_uk, class(lineage_class) + count(Count) ~ WeekEndDate )
+# class(tmp)
+# summary(tmp)
+# 
+# x=tmp
+# epi = tmp %>% get_meta()
+# m = epi$m
+
+# https://stats.stackexchange.com/questions/561596/using-a-spatial-tensor-spline-in-a-nnetmultinom-multinomial-fit-in-r
+
+# tmp2 = .normalise(tmp) %>% estimate_proportion(window = 14)
+# tmp3 = tmp2 %>% .denormalise(epi)
+# 
+# plot_data = tmp3 %>% unnest(probability) %>% group_by(WeekEndDate) %>% mutate(Quantile.0.5.adj = exp(Quantile.0.5)/sum(exp(Quantile.0.5))) %>% ungroup()
+# 
+# ggplot(plot_data, aes(x=WeekEndDate,y=Quantile.0.5,ymin=Quantile.0.025,ymax=Quantile.0.975,colour=lineage_class,fill=lineage_class))+geom_line()+geom_ribbon(colour=NA,alpha=0.1)+scale_x_date(date_breaks = "2 month",date_labels = "%b %y",labels = label_wrap(20))
+# 
+# ggplot(plot_data, aes(x=WeekEndDate,y=Quantile.0.5.adj,fill=lineage_class))+geom_area()+scale_x_date(date_breaks = "2 month",date_labels = "%b %y")
+# 
+# epifun = function(x,prompt,...) {return(x %>% mutate(prompt = prompt))}
+# tmp %>% .execute_epifunction(epifun, prompt = "hello")
+# 
+# 
+# .normalise(tmp) %>% mutate(class=factor(class)) %>% glimpse()
+
+# ll = tmp %>% as.epi_ll(jitter=TRUE) %>% glimpse()
+# fitdata = ll %>% .normalise() %>% mutate(.time = .date_to_time(date), class = factor(class))
+# 
+# model = nnet::multinom(class ~ splines::bs(.time,degree=2),data = fitdata)
+# # to = terms(model)
+# # https://github.com/ZheyuanLi/SplinesUtils/blob/master/R/SplinesUtils.R
+# 
+# ll2 = ll %>% mutate(model$fitted.values %>% as.data.frame() %>% 
+#   rename_with(.cols = everything(), ~ paste0("pred.",.)))
+# ts3  = ll2 %>% group_by(WeekEndDate) %>% summarise(across(.cols = starts_with("pred"), .fns = list(mean = mean)))
+# ts3  = ll2 %>% select(WeekEndDate,starts_with("pred")) %>% distinct()
+# plot_data2 = ts3 %>% glimpse() %>% pivot_longer(cols=c(-WeekEndDate), names_to="class", values_to="probability") %>% mutate(class = stringr::str_remove(class,"pred."))
+# 
+# ggplot(plot_data2, aes(x=WeekEndDate,y=probability,fill=class,colour=class))+geom_area()+scale_x_date(date_breaks = "2 month",date_labels = "%b %y",name = NULL)+
+#   # scale_fill_subtype(scales::viridis_pal, direction=-1, subclasses = c(1,2,4))
+#   scale_fill_subtype(scales::brewer_pal, palette="Dark2", subclasses = c(1,2,4), name="variant")+
+#   scale_colour_subtype(subclasses = c(1,2,4), name="variant")
+
+# get_variant_model = function(variant_data, facet_name) {
+#   tmp = as.epi_ts(variant_data, class(lineage_class) + count(Count) ~ WeekEndDate )
+#   ll = tmp %>% as.epi_ll(jitter=TRUE)
+#   fitdata = ll %>% .normalise() %>% mutate(.time = .date_to_time(date), class = factor(class))
+#   model = nnet::multinom(class ~ splines::bs(.time,degree=2),data = fitdata)
+# # to = terms(model)
+# # https://github.com/ZheyuanLi/SplinesUtils/blob/master/R/SplinesUtils.R
+# 
+#   ll2 = ll %>% mutate(model$fitted.values %>% as.data.frame() %>% 
+#     rename_with(.cols = everything(), ~ paste0("pred.",.)))
+#   ts3  = ll2 %>% group_by(WeekEndDate) %>% summarise(across(.cols = starts_with("pred"), .fns = list(mean = mean)))
+#   ts3  = ll2 %>% select(WeekEndDate,starts_with("pred")) %>% distinct()
+#   plot_data2 = ts3 %>% glimpse() %>% pivot_longer(cols=c(-WeekEndDate), names_to="class", values_to="probability") %>% 
+#     mutate(class = stringr::str_remove(class,"pred.")) %>%
+#     mutate(facet = facet_name)
+#   
+#   return(list(model=model,data=plot_data2))
+# }
+
+tmp1 = get_variant_model(variants_uk, "England")
+ 
+
+  
+
+
+```
+
+
+
+
+```{r}
+variants_bristol = variants2 %>% 
+  filter(LTLA %in% c("E06000023","E06000025","E06000022","E06000024")) %>%
+  group_by(WeekEndDate, lineage_class) %>% 
+  summarise(Count = sum(Count), .groups="drop")
+
+
+tmp2 = get_variant_model(variants_bristol, "Bristol")
+
+
+```
+
+
+```{r}
+
+do_variant_plot = function(variants_model) {
+  plot_data = variants_model$data
+  ts = variants_model$ts
+  ts = ts %>% group_by(date) %>% mutate(count = sum(count))
+  ul = max(ts$count) + 500 - max(ts$count)%%500
+  ts = ts %>% mutate(count_plot = count/ul)
+  p = ggplot(plot_data, aes(x=date,y=probability,fill=class,colour=class))+geom_area()+scale_x_date(date_breaks = "2 month",date_labels = "%b %y",name = NULL)+
+    # scale_fill_subtype(scales::viridis_pal, direction=-1, subclasses = c(1,2,4))
+    scale_fill_subtype(scales::brewer_pal, palette="Dark2", subclasses = c(1,2,4), name="variant")+
+    scale_colour_subtype(subclasses = c(1,2,4), name="variant")+
+    geom_segment(data = ts, mapping=aes(x=date,xend=date+6,y=count_plot,yend=count_plot), color = "yellow", size=0.5, inherit.aes=FALSE)+
+    scale_y_continuous(sec.axis = sec_axis(trans = ~ .*ul,name = "sequences per week"))+
+    facet_wrap(vars(facet))+
+    geom_timeseries_events(events, label_y=0.5)
+  return(p)
+}
+
+p1 = tmp1 %>% do_variant_plot()
+p2 = tmp2 %>% do_variant_plot()
+p = p1+ggrrr::gg_hide_X_axis()+p2+patchwork::plot_layout(ncol=1,guides = "collect")
+p %>% ggrrr::gg_save_as(out("variant-proportions"), size = std_size$half)
+```
+
+```{r}
+# variants_uk = variants2 %>% 
+#   group_by(WeekEndDate, lineage_class) %>% 
+#   summarise(Count = sum(Count)) %>%
+#   ungroup() %>%
+#   tidyr::complete(WeekEndDate, lineage_class,fill = list(Count=0)) %>%
+#   group_by(lineage_class) %>% 
+#   arrange(WeekEndDate) %>% 
+#   mutate(roll.Count = slider::slide_dbl(Count,sum,na.rm=TRUE,.before = 2,.after = 2)) %>% # stats::filter(Count,filter = rep(1,4),sides=1)) %>%
+#   group_by(WeekEndDate) %>%
+#   mutate(binom::binom.confint(roll.Count, sum(roll.Count), methods = "wilson"))
+# 
+# variants_bristol = variants2 %>% 
+#   filter(LTLA %in% c("E06000023","E06000025","E06000022","E06000024")) %>%
+#   group_by(WeekEndDate, lineage_class) %>% 
+#   summarise(Count = sum(Count)) %>%
+#   ungroup() %>%
+#   tidyr::complete(WeekEndDate, lineage_class,fill = list(Count=0)) %>%
+#   group_by(lineage_class) %>% 
+#   arrange(WeekEndDate) %>% 
+#   mutate(roll.Count = slider::slide_dbl(Count,sum,na.rm=TRUE,.before = 2,.after = 2)) %>% # stats::filter(Count,filter = rep(1,4),sides=1)) %>%
+#   group_by(WeekEndDate) %>%
+#   mutate(binom::binom.confint(roll.Count, sum(roll.Count), methods = "wilson"))
+
+```
+
+```{r}
+
+
+
+# plotData = bind_rows(
+#   variants_uk %>% mutate(area = "UK"),
+#   variants_bristol %>% mutate(area = "Bristol & surrounds")
+# ) %>% filter(WeekEndDate < "2022-05-05")
+# 
+# p = ggplot(
+#   plotData, 
+#   aes(x=WeekEndDate,y=mean*100,fill=lineage_class))+
+#   geom_area(stat="identity")+
+#   scale_fill_brewer(palette="Pastel1",name=NULL)+
+#   ylab("Proportion sequences (%)")+
+#   xlab(NULL)+
+#   scale_x_date(date_breaks = "1 month")+
+#   facet_wrap(vars(area),ncol = 1)
+# 
+# p %>% gg_save_as(out("lineages_supp"))
+
+```
+
+
+## COG UK sequencing dominance
+
+
+
+```{r}
+tmp3 = variants2 %>% 
+  filter(who_class != "Unclassified") %>%
+  group_by(WeekEndDate, who_class) %>% 
+  summarise(Count = sum(Count), .groups="drop") %>%
+  get_variant_model("England", form = class(who_class) + count(Count) ~ WeekEndDate)
+
+tmp4 = variants2 %>% 
+  filter(who_class != "Unclassified") %>%
+  filter(LTLA %in% c("E06000023","E06000025","E06000022","E06000024")) %>%
+  group_by(WeekEndDate, who_class) %>% 
+  summarise(Count = sum(Count), .groups="drop") %>% 
+  get_variant_model("Bristol", form = class(who_class) + count(Count) ~ WeekEndDate)
+
+combined = bind_rows(
+  tmp3$data,
+  tmp4$data
+) %>% glimpse()
+
+
+begin = min(combined$date)
+end = max(combined$date)
+
+cogDates = bind_rows(
+  combined %>% group_by(facet,class) %>% filter(probability > 0.025) %>% filter(date == min(date) & date!=begin) %>% mutate(type = "Emerged"),
+  combined %>% group_by(facet,class) %>% filter(probability > 0.95) %>% filter(date == min(date) & date!=begin) %>% mutate(type = "Dominant (start)"),
+  combined %>% group_by(facet,class) %>% filter(probability > 0.95) %>% filter(date == max(date) & date!=end) %>% mutate(type = "Dominant (end)"),
+  combined %>% group_by(facet,class) %>% filter(probability > 0.025) %>% filter(date == max(date) & date!=end) %>% mutate(type = "Extinction")
+) %>% mutate(
+  type = factor(type,levels=c("Emerged","Dominant (start)","Dominant (end)","Extinction")),
+  facet = factor(facet, levels=c("England","Bristol"))
+)
+
+
+cogDates %>% select(Area = facet, Lineage = class, type, Date = date) %>%
+  mutate(Date = fdmy(Date)) %>%
+  hux_tidy(rowGroupVars = vars(Area,Lineage), colGroupVars = vars(type)) %>%
+  hux_save_as(out("cog_dates"))
+```
+
