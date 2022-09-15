@@ -9,8 +9,7 @@ here::i_am("common-setup.R")
 
 # install specific release for stability purposes
 devtools::install_github("terminological/html2pdfr@0.4.1", build_opts = c("--no-multiarch"),quiet = TRUE,upgrade = FALSE)
-# devtools::install_github("terminological/ggrrr@0.0.0.9007", build_opts = c("--no-multiarch"),quiet = TRUE,upgrade = FALSE)
-ggrrr::unstable()
+devtools::install_github("terminological/ggrrr@0.0.0.9009", build_opts = c("--no-multiarch"),quiet = TRUE,upgrade = FALSE)
 
 library(ggrrr)
 
