@@ -1,0 +1,326 @@
+---
+title: "Supporting materials"
+output: html_document
+knit: ggrrr::knit_versioned("html","output/pneumococcal")
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+here::i_am("pneumococcal/subtype-proportions.Rmd")
+source(here::here("common-setup.R"))
+
+out = ggrrr::outputter(directory=here::here("output/pneumococcal"),datedSubdirectory = TRUE,datedFile = FALSE)
+ggrrr:::.this_script()
+
+```
+
+## Sanger lineage data
+
+* The sanger centre / COGUK citation
+* Sequencing background
+* Pango lineage background citation
+* WHO classification of lineages background
+
+
+```{r}
+avoncap::input()
+antigens = avoncap::load_data("urine-antigens")
+tmp = antigens %>% mutate(
+  pneumo.urine_antigen_result = case_when(
+    RESULT %in% c('IND','QNS') ~ "Other",
+    RESULT %in% c('Neg','NEG') ~ "Negative",
+    RESULT %in%  c('Pos','POS') ~ "Positive",
+    TRUE ~ "Unknown",
+  ) %>% factor(c("Positive","Negative","Other","Unknown")),
+  pneumo.test_date = lubridate::dmy(EVENT_DATE),
+  pneumo.urine_antigen_test = stringr::str_remove(ANALYSIS,"_UAD") %>% stringr::str_remove("PN_"),
+  admin.consented_record_number = sprintf("%s-%s",
+          str_sub(as.character(SUBJECT),1,4),
+          str_sub(as.character(SUBJECT),5,-1)
+  )
+)
+
+binax = tmp %>% filter(pneumo.urine_antigen_test == "BINAX") %>%  
+  select(admin.consented_record_number, pneumo.binax_result = pneumo.urine_antigen_result) %>%
+  mutate(
+    pneumo.binax_subpopulation = pneumo.binax_result %in% c("Positive","Negative"),
+    pneumo.binax_detected = pneumo.binax_result %in% c("Positive")
+  )
+
+non_binax = tmp %>% filter(pneumo.urine_antigen_test != "BINAX") %>% 
+  select(admin.consented_record_number, pneumo.urine_antigen_test, pneumo.urine_antigen_result)
+
+# Serotype lists
+serotypes = tmp %>% filter(pneumo.urine_antigen_test != "BINAX") %>% pull(pneumo.urine_antigen_test) %>% unique()
+pcv7 = c("4", "6B", "9V", "14", "18C", "19F", "23F")
+pcv13on7 = c("1", "5", "7F", "3", "6A", "19A")
+pcv13 = c(pcv7, pcv13on7)
+pcv15 = c(pcv13, "22F", "33F")
+pcv20on13 = c("22F", "33F",  "8", "10A", "11A", "12F", "15B")
+pcv20 = c(pcv13, pcv20on13)
+ppv23on20 = c("2", "9N", "17F", "20")
+ppv23 = c(pcv20, ppv23on20)
+
+
+non_binax2 = non_binax %>%
+  pivot_wider(names_from = pneumo.urine_antigen_test, values_from = pneumo.urine_antigen_result) %>% 
+  mutate(
+      pneumo.urine_antigen_subgroup = if_any(.cols = -admin.consented_record_number, ~ .x %in% c("Positive","Negative")),
+      pneumo.urine_antigen_detected = if_any(.cols = -admin.consented_record_number, ~ .x %in% c("Positive")),
+      pneumo.pcv7_serotype = ifelse(!pneumo.urine_antigen_detected, NA, if_any(.cols = all_of(pcv7), ~ .x %in% c("Positive"))),
+      pneumo.pcv13_serotype = ifelse(!pneumo.urine_antigen_detected, NA, if_any(.cols = all_of(pcv13), ~ .x %in% c("Positive"))),
+      pneumo.pcv15_serotype = ifelse(!pneumo.urine_antigen_detected, NA, if_any(.cols = all_of(pcv15), ~ .x %in% c("Positive"))),
+      pneumo.pcv20_serotype = ifelse(!pneumo.urine_antigen_detected, NA, if_any(.cols = all_of(pcv20), ~ .x %in% c("Positive"))),
+      pneumo.ppv23_serotype = ifelse(!pneumo.urine_antigen_detected, NA, if_any(.cols = all_of(ppv23), ~ .x %in% c("Positive")))
+  ) %>% nest(pneumo.serotype_tests = all_of(serotypes)) 
+
+non_binax3 = non_binax %>% 
+  ungroup() %>%
+  filter(pneumo.urine_antigen_result == "Positive") %>% 
+  group_by(admin.consented_record_number) %>%
+  summarise(pneumo.serotype_urine_antigen = paste0(pneumo.urine_antigen_test,collapse="+")) %>% glimpse()
+
+dated_cases = tmp %>% select(admin.consented_record_number, pneumo.test_date) %>% distinct()
+
+if (dated_cases %>% group_by(admin.consented_record_number) %>% count() %>% filter(n>1) %>% nrow()>1) warning("duplicates in dated_cases")
+if (binax %>% group_by(admin.consented_record_number) %>% count() %>% filter(n>1) %>% nrow()>1) warning("duplicates in binax")
+if (non_binax2 %>% group_by(admin.consented_record_number) %>% count() %>% filter(n>1) %>% nrow()>1) warning("duplicates in uad details")
+if (non_binax3 %>% group_by(admin.consented_record_number) %>% count() %>% filter(n>1) %>% nrow()>1) warning("duplicates in serotype")
+
+cleaned_antigens = 
+  dated_cases %>%
+    left_join(binax, by="admin.consented_record_number") %>%
+    left_join(non_binax2, by="admin.consented_record_number") %>%
+    left_join(non_binax3, by="admin.consented_record_number")
+
+cleaned_antigens = cleaned_antigens %>% mutate(
+  pneumo.detected = case_when(
+    pneumo.binax_detected ~ TRUE,
+    pneumo.urine_antigen_detected ~ TRUE,
+    TRUE ~ FALSE
+  ),
+  pneumo.pcv_sensitivity = case_when(
+    !pneumo.detected ~ NA_character_,
+    pneumo.ppv23_serotype & !pneumo.pcv20_serotype ~ "ppv23 sensitive",
+    pneumo.pcv20_serotype & !pneumo.pcv15_serotype ~ "pcv20 sensitive",
+    pneumo.pcv15_serotype & !pneumo.pcv13_serotype ~ "pcv15 sensitive",
+    pneumo.pcv13_serotype & !pneumo.pcv7_serotype ~ "pcv13 sensitive",
+    pneumo.pcv7_serotype ~ "pcv7 sensitive",
+    TRUE ~ "other"
+  ) %>% factor(c("pcv7 sensitive","pcv13 sensitive","pcv15 sensitive","pcv20 sensitive","ppv23 sensitive","other"))
+)
+
+structure = cleaned_antigens %>% group_by(pneumo.pcv_sensitivity, pneumo.serotype_urine_antigen) %>% count() %>% arrange(pneumo.pcv_sensitivity, desc(n))
+levels = na.omit(structure$pneumo.serotype_urine_antigen)
+groups = structure %>% group_by(pneumo.pcv_sensitivity) %>% count() %>% pull(n)
+
+cleaned_antigens = cleaned_antigens %>% mutate(pneumo.serotype_urine_antigen = factor(pneumo.serotype_urine_antigen,levels=levels))
+
+
+# with(cleaned_antigens, table(pneumo.binax_result, pneumo.urine_antigen_detected,useNA = "always"))
+```
+
+
+
+```{r}
+# avoncap::valid_inputs()
+
+linelist = avoncap::load_data("avoncap-export",merge = TRUE)
+ll2 = linelist %>% avoncap::normalise_data()
+
+controls = avoncap::load_data("uad-control")
+cont2 = controls %>% avoncap::normalise_data()
+
+uad_cases = cleaned_antigens %>% inner_join(ll2, by="admin.consented_record_number")
+uad_controls = cleaned_antigens %>% inner_join(cont2, by="admin.consented_record_number")
+
+uad_unmatched = cleaned_antigens %>% 
+  anti_join(uad_cases, by="admin.consented_record_number") %>%
+  anti_join(uad_controls, by="admin.consented_record_number")
+
+```
+
+```{r}
+
+uad_count_no_time = uad_cases %>% filter(pneumo.detected) %>% group_by(pneumo.serotype_urine_antigen) %>% summarise(count = n(), .groups="drop") %>% mutate(N = sum(count)) %>% mutate(binom::binom.confint(count, N, method="wilson"))
+ggplot(uad_count_no_time,aes(x=pneumo.serotype_urine_antigen, y=mean, ymin=lower,ymax=upper, fill=pneumo.serotype_urine_antigen))+
+  geom_bar(stat="identity")+
+  geom_errorbar(width = 0.8)+
+  scale_fill_subtype(scales::brewer_pal, palette="Dark2", subclasses = groups, name="serotype")
+
+uad_count_by_age_no_time = uad_cases %>% filter(pneumo.detected) %>% mutate(
+    pneumo.age_cat = ggrrr::cut_integer(demog.age, 65)
+  ) %>% 
+  group_by(pneumo.age_cat,pneumo.pcv_sensitivity) %>% summarise(count = n(), .groups="drop") %>%
+  group_by(pneumo.age_cat) %>% mutate(N = sum(count)) %>%
+  mutate(binom::binom.confint(count, N, method="wilson"))
+ggplot(uad_count_by_age_no_time,aes(x=pneumo.pcv_sensitivity, y=mean, ymin=lower,ymax=upper, fill=pneumo.age_cat))+
+  geom_bar(stat="identity", position = "dodge",colour="black")+
+  geom_errorbar(width = 0.8, position = position_dodge(), colour="black")+
+  scale_fill_brewer(palette="Dark2", name="serotype")+
+  ylab("proportion of cases in age group")+
+  xlab("PCV ")
+
+```
+
+```{r}  
+
+
+uad_count = uad_cases %>% mutate(pneumo.week = ggrrr::cut_date(pneumo.test_date,period="1 week")) %>% 
+  group_by(pneumo.week, pneumo.serotype_urine_antigen) %>% summarise(count = n(), .groups="drop")
+
+
+uad_count_by_age = uad_cases %>% mutate(
+  pneumo.week = ggrrr::cut_date(pneumo.test_date,period="1 week"),
+  pneumo.age_cat = ggrrr::cut_integer(demog.age, 65)
+  ) %>% 
+  group_by(pneumo.week, pneumo.age_cat, pneumo.serotype_urine_antigen) %>% summarise(count = n(), .groups="drop")
+
+  
+
+get_variant_model = function(variant_data, facet_name, form = class(lineage_class) + count(Count) ~ WeekEndDate) {
+  
+  tmp = avoncap:::as.epi_ts(variant_data, form ) 
+  ts = tmp %>% .normalise() %>% ungroup() 
+  tmp2 = ts %>% group_by(.time) %>% filter(sum(count)>0) %>% ungroup() %>% select(class,count,.time) 
+  tmp3 = tmp2 %>% pivot_wider(names_from = class, values_from = count)
+  
+  response = tmp3 %>% select(-.time) %>% as.matrix()
+  predictor = tmp3 %>% pull(.time)
+  
+  model = nnet::multinom(class_count ~ splines::bs(.time,degree=2,df=1), data = tibble(class_count=response,.time=predictor))
+  times = tibble(.time = .full_seq_times(predictor,1))
+  probs = bind_cols(times,as.data.frame(predict(model,newdata = times,type = "probs")))
+  # probs %>% glimpse()
+  plot_data = probs %>% pivot_longer(cols = -.time, names_to = "class", values_to = "probability") %>% 
+    mutate(date = .time_to_date(.time)) %>% 
+    # .denormalise(tmp %>% get_meta()) %>%
+    mutate(facet = facet_name)
+  
+  for (c in colnames(tmp2)) {
+    if (is.factor(tmp2[[c]])) {
+      plot_data[[c]] = factor(plot_data[[c]],levels = levels(tmp2[[c]]))
+    }
+  }
+    
+  return(list(model=model,data=plot_data, ts = ts))
+}
+
+
+
+
+# tmp = as.epi_ts(variants_uk, class(lineage_class) + count(Count) ~ WeekEndDate )
+# class(tmp)
+# summary(tmp)
+# 
+# x=tmp
+# epi = tmp %>% get_meta()
+# m = epi$m
+
+# https://stats.stackexchange.com/questions/561596/using-a-spatial-tensor-spline-in-a-nnetmultinom-multinomial-fit-in-r
+
+# tmp2 = .normalise(tmp) %>% estimate_proportion(window = 14)
+# tmp3 = tmp2 %>% .denormalise(epi)
+# 
+# plot_data = tmp3 %>% unnest(probability) %>% group_by(WeekEndDate) %>% mutate(Quantile.0.5.adj = exp(Quantile.0.5)/sum(exp(Quantile.0.5))) %>% ungroup()
+# 
+# ggplot(plot_data, aes(x=WeekEndDate,y=Quantile.0.5,ymin=Quantile.0.025,ymax=Quantile.0.975,colour=lineage_class,fill=lineage_class))+geom_line()+geom_ribbon(colour=NA,alpha=0.1)+scale_x_date(date_breaks = "2 month",date_labels = "%b %y",labels = label_wrap(20))
+# 
+# ggplot(plot_data, aes(x=WeekEndDate,y=Quantile.0.5.adj,fill=lineage_class))+geom_area()+scale_x_date(date_breaks = "2 month",date_labels = "%b %y")
+# 
+# epifun = function(x,prompt,...) {return(x %>% mutate(prompt = prompt))}
+# tmp %>% .execute_epifunction(epifun, prompt = "hello")
+# 
+# 
+# .normalise(tmp) %>% mutate(class=factor(class)) %>% glimpse()
+
+# ll = tmp %>% as.epi_ll(jitter=TRUE) %>% glimpse()
+# fitdata = ll %>% .normalise() %>% mutate(.time = .date_to_time(date), class = factor(class))
+# 
+# model = nnet::multinom(class ~ splines::bs(.time,degree=2),data = fitdata)
+# # to = terms(model)
+# # https://github.com/ZheyuanLi/SplinesUtils/blob/master/R/SplinesUtils.R
+# 
+# ll2 = ll %>% mutate(model$fitted.values %>% as.data.frame() %>% 
+#   rename_with(.cols = everything(), ~ paste0("pred.",.)))
+# ts3  = ll2 %>% group_by(WeekEndDate) %>% summarise(across(.cols = starts_with("pred"), .fns = list(mean = mean)))
+# ts3  = ll2 %>% select(WeekEndDate,starts_with("pred")) %>% distinct()
+# plot_data2 = ts3 %>% glimpse() %>% pivot_longer(cols=c(-WeekEndDate), names_to="class", values_to="probability") %>% mutate(class = stringr::str_remove(class,"pred."))
+# 
+# ggplot(plot_data2, aes(x=WeekEndDate,y=probability,fill=class,colour=class))+geom_area()+scale_x_date(date_breaks = "2 month",date_labels = "%b %y",name = NULL)+
+#   # scale_fill_subtype(scales::viridis_pal, direction=-1, subclasses = c(1,2,4))
+#   scale_fill_subtype(scales::brewer_pal, palette="Dark2", subclasses = c(1,2,4), name="variant")+
+#   scale_colour_subtype(subclasses = c(1,2,4), name="variant")
+
+# get_variant_model = function(variant_data, facet_name) {
+#   tmp = as.epi_ts(variant_data, class(lineage_class) + count(Count) ~ WeekEndDate )
+#   ll = tmp %>% as.epi_ll(jitter=TRUE)
+#   fitdata = ll %>% .normalise() %>% mutate(.time = .date_to_time(date), class = factor(class))
+#   model = nnet::multinom(class ~ splines::bs(.time,degree=2),data = fitdata)
+# # to = terms(model)
+# # https://github.com/ZheyuanLi/SplinesUtils/blob/master/R/SplinesUtils.R
+# 
+#   ll2 = ll %>% mutate(model$fitted.values %>% as.data.frame() %>% 
+#     rename_with(.cols = everything(), ~ paste0("pred.",.)))
+#   ts3  = ll2 %>% group_by(WeekEndDate) %>% summarise(across(.cols = starts_with("pred"), .fns = list(mean = mean)))
+#   ts3  = ll2 %>% select(WeekEndDate,starts_with("pred")) %>% distinct()
+#   plot_data2 = ts3 %>% glimpse() %>% pivot_longer(cols=c(-WeekEndDate), names_to="class", values_to="probability") %>% 
+#     mutate(class = stringr::str_remove(class,"pred.")) %>%
+#     mutate(facet = facet_name)
+#   
+#   return(list(model=model,data=plot_data2))
+# }
+
+# tmp1 = get_variant_model(variants_uk, "England")
+ 
+
+  
+
+
+```
+
+
+
+
+
+
+
+```{r}
+
+do_variant_plot = function(variants_model, events = NULL) {
+  plot_data = variants_model$data
+  ts = variants_model$ts
+  ts = ts %>% group_by(date) %>% mutate(count = sum(count))
+  ul = max(ts$count) + 5 - max(ts$count)%%5
+  ts = ts %>% mutate(count_plot = count/ul)
+  p = ggplot(plot_data, aes(x=date,y=probability,fill=class,colour=class))+geom_area()+scale_x_date(date_breaks = "2 month",date_labels = "%b %y",name = NULL)+
+    #scale_fill_subtype(scales::viridis_pal, direction=-1, subclasses = groups)
+    scale_fill_subtype(scales::brewer_pal, palette="Dark2", subclasses = groups, name="serotype")+
+    scale_colour_subtype(subclasses = groups, name="serotype")+
+    # scale_fill_viridis_d()+
+    geom_segment(data = ts, mapping=aes(x=date,xend=date+6,y=count_plot,yend=count_plot), color = "black", size=0.5, inherit.aes=FALSE)+
+    scale_y_continuous(sec.axis = sec_axis(trans = ~ .*ul,name = "cases per week"))+
+    facet_wrap(vars(facet))
+  if(!is.null(events)) p = p +
+    geom_timeseries_events(events, label_y=0.5)
+  return(p)
+}
+
+model = get_variant_model(uad_count, "All ages", class(pneumo.serotype_urine_antigen) + count(count) ~ pneumo.week)
+p1 = model %>% do_variant_plot()
+
+p = list()
+for (l in levels(uad_count_by_age$pneumo.age_cat)) {
+  model2 = get_variant_model(uad_count_by_age %>% filter(pneumo.age_cat==l), l, class(pneumo.serotype_urine_antigen) + count(count) ~ pneumo.week)
+  p2 = model2 %>% do_variant_plot()
+  p = c(p, list(l = p2))
+}
+
+patchwork::wrap_plots(p,ncol=1, guides = "collect")
+
+# p2 = tmp2 %>% do_variant_plot()
+# p = p1+ggrrr::gg_hide_X_axis()+p2+patchwork::plot_layout(ncol=1,guides = "collect")
+# p %>% ggrrr::gg_save_as(out("variant-proportions"), size = std_size$half)
+```
+

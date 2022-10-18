@@ -324,7 +324,7 @@ cogDates = bind_rows(
 
 
 cogDates %>% select(Area = facet, Lineage = class, type, Date = date) %>%
-  mutate(Date = fdmy(Date)) %>%
+  mutate(Date = .fdmy(Date)) %>%
   hux_tidy(rowGroupVars = vars(Area,Lineage), colGroupVars = vars(type)) %>%
   hux_save_as(out("cog_dates"))
 ```

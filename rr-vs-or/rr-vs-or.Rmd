@@ -1,0 +1,158 @@
+---
+title: "Relative Risk, Odds Ratio, Vaccine Effectiveness"
+output: html_document
+bibliography: ["bibliography.bib"]
+biblio-style: "apalike"
+link-citations: true
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+devtools::load_all("~/Git/avoncap")
+```
+
+```{r}
+population = 1000
+prev = seq(0.04,0.2,0.04)
+p = seq(0.1,0.9,0.2)
+
+space = tidyr::crossing(
+  tidyr::crossing(
+    p_case = prev, 
+    p_control = prev, 
+    p_vacc = p,
+  ),
+  tidyr::crossing(
+    p_vacc_given_case = p, 
+    p_vacc_given_control = p,
+  ) %>% filter(
+    # cases not more likely to be vaccinated than controls
+    p_vacc_given_case <= p_vacc_given_control,
+  ),
+  tidyr::crossing(
+    p_admit_given_vacc_case = prev,
+    p_admit_given_unvacc_case = prev
+  ) %>% filter(
+    # vaccination does not make risk worse:
+    p_admit_given_vacc_case <= p_admit_given_unvacc_case
+  ),
+  tidyr::crossing(
+    p_admit_given_vacc_control = prev,
+    p_admit_given_unvacc_control = prev
+  ) %>% filter(
+    # vaccination does not infer more risk of admission to controls
+    p_admit_given_vacc_control <= p_admit_given_unvacc_control,
+    # vaccination has at most a small (beneficial) effect on risk of admission to controls
+    abs(p_admit_given_vacc_control-p_admit_given_unvacc_control)<0.1
+  )
+) 
+
+space2 = space %>% mutate(
+  case_incidence = population*p_case,
+  control_incidence = population*p_control,
+  vacc_case = case_incidence*p_vacc_given_case, 
+  unvacc_case = case_incidence*(1-p_vacc_given_case),
+  vacc_pop = population*p_vacc,
+  unvacc_pop = population*(1-p_vacc),
+  vacc_not_case = vacc_pop - vacc_case,
+  unvacc_not_case = unvacc_pop - unvacc_case, 
+  vacc_control = control_incidence*p_vacc_given_control, 
+  unvacc_control = control_incidence*(1-p_vacc_given_control),
+  admit_vacc_case = vacc_case*p_admit_given_vacc_case, 
+  admit_unvacc_case = unvacc_case*p_admit_given_unvacc_case, 
+  admit_vacc_control = vacc_control*p_admit_given_vacc_control, 
+  admit_unvacc_control = unvacc_control*p_admit_given_unvacc_control
+) %>% filter(
+  vacc_not_case > 0 & unvacc_not_case > 0
+)
+
+# p_vacc_given_case = (p_vacc - (p_vacc*VE)) / (1-p_vacc*VE)
+# (1-p_vacc*VE)*p_vacc_given_case = p_vacc-p_vacc*VE
+# p_vacc_given_case-p_vacc_given_case*p_vacc*VE = p_vacc-p_vacc*VE
+# p_vacc_given_case-p_vacc = p_vacc_given_case*p_vacc*VE-p_vacc*VE
+# p_vacc_given_case-p_vacc = (p_vacc_given_case*p_vacc-p_vacc)*VE
+# (p_vacc_given_case-p_vacc) / (p_vacc_given_case*p_vacc-p_vacc) = VE
+
+space3 = space2 %>% mutate(
+  VE = (p_vacc_given_case-p_vacc) / (p_vacc_given_case*p_vacc-p_vacc),
+  AR_vacc = vacc_case/vacc_pop,
+  AR_unvacc = unvacc_case/unvacc_pop,
+  RR_population = AR_vacc / AR_unvacc,
+  VE_infection.RR = 1-RR_population,
+  AR_admit_vacc = admit_vacc_case/vacc_pop,
+  AR_admit_unvacc = admit_unvacc_case/unvacc_pop,
+  RR_admit = AR_admit_vacc / AR_admit_unvacc,
+  VE_admit.RR = 1-RR_admit,
+  
+  OR_unmatched_admit = (admit_vacc_case * admit_unvacc_control) / (admit_vacc_control * admit_unvacc_case),
+  VE_admit.OR = 1-OR_unmatched_admit,
+  VE_admit.OR_vs_RR = VE_admit.OR - VE_admit.RR
+)
+
+space3 %>% arrange(desc(abs(VE_admit.OR_vs_RR))) %>% head(20) %>% view()
+
+# devtools::load_all("~/Git/avoncap")
+# space2 = space %>% 
+#   mutate(odds_ratio_ve(case_vacc,case_unvacc,control_vacc,control_unvacc)) %>%
+#   mutate(relative_risk_ve(case_vacc,case_unvacc,control_vacc,control_unvacc))
+# 
+# space2 = space2 %>% filter(p_vacc_given_case <= p_vacc_given_control) %>% mutate(VE.OR.RR.bias = VE.OR - VE.RR)
+
+
+view(space2)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+
+```{r}
+population = 1000
+prev = seq(0.04,0.2,0.04)
+p = seq(0.1,0.9,0.2)
+
+ve_space = tidyr::crossing(
+    VE_case = 0.8, #seq(0,1,0.05), 
+    VE_admit = 0.9, #seq(0,1,0.05),
+    p_vacc = 0.75, #seq(0,1,0.05),
+    p_case = 0.1, #seq(0,1,0.05),
+    p_admit_given_case = 0.2, # seq(0,0.2,0.05),
+    p_control = 0.2, #seq(0,1,0.05),
+    p_admit_given_control = 0.1 #seq(0,0.2,0.05)
+) %>% mutate(
+  p_unvacc = 1-p_vacc,
+  p_not_case = 1-p_case,
+  p_control_given_not_case = p_control/p_not_case,
+  # VE definition:
+  p_vacc_given_case = (p_vacc - (p_vacc * VE_case)) / (1-(p_vacc * VE_case)),
+  # bayes
+  p_case_given_vacc = p_vacc_given_case * p_case / p_vacc,
+  p_unvacc_given_case = 1-p_vacc_given_case,
+  p_case_given_unvacc = p_unvacc_given_case * p_case / p_unvacc,
+  p_vacc_given_not_case = p_vacc,
+  p_not_case_given_vacc = p_vacc_given_not_case * p_not_case / p_vacc,
+  p_unvacc_given_not_case = p_unvacc,
+  p_not_case_given_unvacc = p_unvacc_given_not_case * p_not_case / p_unvacc#,
+  
+  # VE definition:
+  # p_vacc_given_admit_case = (p_vacc - (p_vacc * VE_admit)) / (1-(p_vacc * VE_admit)),
+  # p_unvacc_given_admit_case = 1-p_vacc_given_admit_case,
+  # p_admit_case_given_vacc = p_vacc_given_admit_case * (p_case * p_admit_given_case) / p_vacc
+) %>% glimpse()
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

@@ -14,35 +14,31 @@ associated patient characteristics and clinical
 outcomes
 
 
-Background
-Acute exacerbations of chronic obstructive pulmonary disease (AECOPD) are common and associated with
-respiratory function decline, increased morbidity and mortality. It is unclear how COVID19 has impacted
-AECOPD phenotype and if it is associated with worse outcomes compared to other infections in COPD
-patients.
+Acute COPD exacerbation is a key and independent risk factor for new
+cardiovascular events within 30 days in a hospitalised cohort.
 
-Aims
-To explore changes in AECOPD clinical characteristics and outcomes during the COVID-19 pandemic.
+Are patients with an exacerbation of COPD at a higher risk of cardiovascular
+events than those presenting with a LRTI without a history of COPD, in a
+hospitalised cohort? (Description as a high-risk group- shared risk factors with
+CVD: hypercholesterolaemia, hypertension, Diabetes, peripheral arterial disease,
+smoking) Which risk factors are specific to COPD? Outcome of interest:
+Cardiovascular event: New AF, STEMI, NSTEMI, arrythmia, HF (not on admission,
+but defined by subsequent diagnosis in hospital or by GP), PE/DVT, Stroke
 
-Methods
-A prospective cohort study of all adults ≥18y admitted to either acute care hospital in Bristol UK, Aug 20–Jul
-21. Patients presenting with signs/symptoms or a clinical/radiological diagnosis of acute respiratory disease
-were included.
+Disease (exposure): COPD – physician diagnosed (exacerbation severity defined by
+DECAF score but no means to define severity of baseline disease)
 
-Results
-2557 hospitalisations with AECOPD were recorded (incidence 361 per 100000); 13% had SARS-CoV-2
-identified, 69% had another pathogen and 18% had no infectious aetiology identified. Patient characteristics
-and clinical features were similar for patients with and without COVID19.
+# Secondary analysis:
 
-ICU admissions were more common with SARS-CoV-2 than other infections (4% v 1%, P<0.001). SARS-
-CoV-2 associated AECOPD had greater inpatient (25% v 9%, P<0.001) and 30-day mortality (25% v 12%,
-P<0.001) than AECOPD associated with other infections. Among all AECOPD patients who had received
-≥1 dose of any COVID vaccination, ICU admission rates were lower than for unvaccinated persons (4% v
-0%, P<0.01).
+Does the nature of the COPD exacerbation (infective vs non-infective) influence
+cardiovascular outcomes? (Infective exacerbation COPD – pneumonic changes on
+imaging, CRP>100, CURB-65, COVID confirmed) Are serum biomarkers (admission
+troponin, admission BNP, CRP) a useful tool in predicting cardiovascular events
+in the COPD cohort?
+ 
 
-Discussion
-SARS-CoV-2 infection was associated with worse outcomes among persons hospitalized with AECOPD.
-SARS-CoV-2 vaccination was effective in reducing disease severity and ICU admission. More data are
-needed about the effectiveness of COVID19 vaccines for modifying disease severity in COPD patients.
+
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -67,7 +63,7 @@ out = outputter(directory=here::here("output/copd-exacerbation"),datedSubdirecto
 
 # this will set the latest date of a data file that will be loaded by the data load scripts.
 # this forces a particular version fo the files for this script.
-options(reproduce.at="2022-06-21")
+options(reproduce.at=NULL)
 
 # ignore these options for the time being they are
 # for formatting the flowchart.
@@ -83,13 +79,25 @@ options(dtrackr.default_count_subgroup = "{.name}: {.count} admissions")
 
 ```{r data}
 
+# meta = load_data("metadata")
+# meta2 = meta %>% mutate(label1 = stringr::str_remove_all(`Field Label`, "<[^>]+>") %>% trimws())
+# meta2 = meta2 %>% mutate(levels = `Choices, Calculations, OR Slider Labels` %>% 
+#                            stringr::str_split("\\s?\\|\\s?") %>% 
+#                            purrr::map(~ tibble(level = .x %>% stringr::str_remove("^[^,]+,\\s?"), label=.x %>% stringr::str_remove(",\\s?.*$"))))
+# meta3 = meta2 %>% unnest(levels) %>% mutate(level = stringr::str_remove_all(level, "<[^>]+>") %>% trimws())
+
+```
+
+
+```{r}
 # Load the data from input directory. 
 # This assumes a file will exist that starts with AvonCAPLRTDCentralDa_y1..., AvonCAPLRTDCentralDa_y2... in the input directory. _y1, _y2 must be present.
 # it will produce one data set from the multiple files.
-lrtd_data = load_data("AvonCAPLRTDCentralDa")
+lrtd_data = load_data("AvonCAPLRTDCentralDa",merge = TRUE)
 
 # This will rename the variables and sort out factor levels. 
-# This has to be done for the ltrd data in a slightly bespoke way because of the multiple file formats.
+# This has to be done for the lrtd data in a slightly bespoke way because of the multiple file formats.
+
 lrtd_norm = normalise_data(lrtd_data)
 # This will augment the data with "standard" outcomes that I have defined in the data-wrangling.R file.
 # This augments the data with a set of "standard" extra variables. However some of these require
@@ -111,7 +119,7 @@ v = lrtd_aug %>% get_value_sets()
 # Might want to change these which are defaulted to the start and end of the data:
 start_week = min(lrtd_aug$admission.study_week,na.rm=TRUE)
 end_week = max(lrtd_aug$admission.study_week,na.rm=TRUE)
-reproduce_at = as.Date(getOption("reproduce.at"))
+reproduce_at = as.Date(getOption("reproduce.at",default = Sys.Date()))
 # maybe for example:
 # start_week = study_week(as.Date("2021-01-01"))
 # end_week = study_week(as.Date("2022-01-01"))
@@ -140,7 +148,7 @@ copd_study = lrtd_aug %>%
       demog.age<18 ~ "{.excluded} under 18 on admission",
       # Taking this out as quite a lot. maybe COPD pts are always symptomatic
       # admission.duration_symptoms > 10 ~ "{.excluded} symptomatic >10 days before admission",
-      admission.date > reproduce_at-7 ~ "{.excluded} with admission after {fdmy(reproduce_at-7)}",
+      admission.date > reproduce_at-7 ~ "{.excluded} with admission after {.fdmy(reproduce_at-7)}",
       admission.episode > 1 ~ "{.excluded} repeat admissions",
       is.na(comorbid.copd) ~ "{.excluded} with unknown COPD status",
       admission.copd_exacerbation_status == "COPD Exacerbation" & comorbid.copd == v$comorbid.copd$no ~ "{.excluded} COPD exacerbations with negative COPD status",
@@ -161,7 +169,7 @@ copd_study = lrtd_aug %>%
 # copd_study %>% excluded() %>% openxlsx::write.xlsx(file = out("exclusions.xlsx"))
 
 # This will give you a figure 1 consort flow chart. This is a dtrackr function.
-copd_study %>% flowchart(filename = out("fig1-flowchart"))
+
 
 # Untracking the data frame means that normal dplyr / tidyverse functions will be used rather than 
 # the overloaded versions from dtrackr. This will be slightly more reliable, but from this point onwards no changes will be tracked.
@@ -177,11 +185,31 @@ copd_only = copd_study %>% filter(comorbid.copd == v$comorbid.copd$yes)
 # a prejudiced theme for publication and sensible size defaults are enforced by the following
 ggrrr::gg_pedantic()
 
-p = ggplot(copd_study,aes(x=comorbid.copd,fill=comorbid.copd))+geom_bar()
+v = copd_study %>% ggrrr::get_value_sets()
+copd_study2 = copd_study %>% mutate(
+    admission.copd_ilrtd_status = case_when(
+      admission.copd_exacerbation_status == v$admission.copd_exacerbation_status$`COPD Exacerbation` & admission.category == v$admission.category$`Confirmed SARS-CoV-2` ~ "COVID with COPD",
+      admission.copd_exacerbation_status == v$admission.copd_exacerbation_status$`COPD Exacerbation` & admission.category == v$admission.category$`No evidence SARS-CoV-2` ~ "Other iLRTD with COPD",
+      admission.copd_exacerbation_status == v$admission.copd_exacerbation_status$`Not COPD Exacerbation` & admission.category == v$admission.category$`Confirmed SARS-CoV-2` ~ "COVID without COPD",
+      admission.copd_exacerbation_status == v$admission.copd_exacerbation_status$`Not COPD Exacerbation` & admission.category == v$admission.category$`No evidence SARS-CoV-2` ~ "Other iLRTD without COPD",
+      TRUE ~ NA_character_
+    ) %>% factor(levels = c("COVID with COPD","Other iLRTD with COPD","COVID without COPD","Other iLRTD without COPD")),
+    admission.ilrtd_status = case_when(
+      admission.category == v$admission.category$`Confirmed SARS-CoV-2` ~ "COVID",
+      admission.category == v$admission.category$`No evidence SARS-CoV-2` ~ "Other iLRTD",
+      TRUE ~ NA_character_
+    ) %>% factor(levels = c("COVID","Other iLRTD"))
+  ) %>% 
+  exclude_all(is.na(admission.ilrtd_status) ~ "{.excluded} non infective causes of aLRTD") %>%
+  dtrackr::comment("{.count} patients")
+
+copd_study2 %>% flowchart(filename = out("fig1-flowchart"))
+
+# p = ggplot(copd_study,aes(x=comorbid.copd,fill=comorbid.copd))+geom_bar()
 
 # ggrrr has some ggplot saving functions that enforces standard sizes and saves in multiple formats:
 # this is good for knowing what it is going to look like at publication. Overriding R markdowns decision making about sizing.
-p %>% ggrrr::gg_save_as(out("fig2-random-plot"),size = ggrrr::std_size$sixth)
+# p %>% ggrrr::gg_save_as(out("fig2-random-plot"),size = ggrrr::std_size$sixth)
 ```
 
 ## Comparison tables
@@ -191,8 +219,8 @@ p %>% ggrrr::gg_save_as(out("fig2-random-plot"),size = ggrrr::std_size$sixth)
 # I've looked at a set of functions to generate comparison tables
 # there are in descriptive-tables.R
 
-t = compare_population(copd_only, 
-    populationVar = admission.category,
+t1 = compare_population(copd_study2, 
+    populationVar = admission.copd_exacerbation_status,
     comparisonVars = vars(
       demog.age,
       demog.gender,
@@ -203,29 +231,207 @@ t = compare_population(copd_only,
       admission.on_inhaled_corticosteroids
     ),
     p.value=TRUE,na.rm = TRUE
-) %>% population_comparison_table(compact = TRUE,show_method = FALSE)
+) 
 
-# col=1
-# rows = (1:nrow(t))[!t %>% huxtable::header_rows()]
-# spans = attributes(t)$rowspan[rows,col]
-# toadj = (rows+spans)[rows+spans > cummax(lag(rows+spans,default = 0))]
-# toadj = rev(as.integer(names(toadj)))
-# t2 = t
-# for (row in toadj) {
-#   t2 = huxtable::insert_row(ht = t2, t[row,1:col],fill = t[row,col], after=row-1)
-#   t2 = t2 %>% set_colspan(row = row, col = col, value = ncol(t)-col+1)
-#   t2 = t2 %>% set_bottom_border(row = row, col = col:ncol(t), value = 0)
-#   t2[row+1,col]=""
-# }
-# headers = (1:nrow(t))[t %>% huxtable::header_rows()]
-# t2[headers,col] = ""
-#   
+t1 = t1 %>% population_comparison_table(compact = TRUE,show_method = FALSE)
 
-t2 = t %>% hux_nest_group(col=1)
+covid_positive_subgroup = copd_study2 %>% filter(admission.ilrtd_status == "COVID")
 
-frac = function(x) return(x/sum(x,na.rm = TRUE))
-# ggrrr has some functions to render tables into different formats. 
-# although docx seems not to be working 
-t2 %>% hux_set_font(defaultFontSize = 6) %>% huxtable::set_col_width(frac(c(0.2,0.8,1,1,1,0.4))) %>% hux_save_as(out("tab1-random-comparison"),formats = c("html","pdf","png"))
+t2 = compare_population(covid_positive_subgroup, 
+    populationVar = admission.copd_ilrtd_status,
+    comparisonVars = vars(
+      demog.age,
+      demog.gender,
+      demog.ethnicity,
+      admission.cci_category,
+      demog.imd_decile,
+      demog.smoker,
+      admission.on_inhaled_corticosteroids
+    ),
+    p.value=TRUE,na.rm = TRUE
+) 
+
+t2 = t2 %>% population_comparison_table(compact = TRUE,show_method = FALSE)
+
+covid_negative_subgroup = copd_study2 %>% filter(admission.ilrtd_status == "Other iLRTD")
+
+
+t3 = compare_population(covid_negative_subgroup, 
+    populationVar = admission.copd_ilrtd_status,
+    comparisonVars = vars(
+      demog.age,
+      demog.gender,
+      demog.ethnicity,
+      admission.cci_category,
+      demog.imd_decile,
+      demog.smoker,
+      admission.on_inhaled_corticosteroids
+    ),
+    p.value=TRUE,na.rm = TRUE
+) 
+
+t3 = t3 %>% population_comparison_table(compact = TRUE,show_method = FALSE)
+
+t = t1 %>% huxtable::add_columns(t2[3:5]) %>% huxtable::add_columns(t3[3:5]) %>% hux_nest_group(col=1)
+
+t %>% hux_set_font(defaultFontSize = 6) %>%
+  hux_save_as(out("tab1-demographic-comparison"),formats = c("html","pdf","png"))
+```
+
+
+```{r}
+
+# I've looked at a set of functions to generate comparison tables
+# there are in descriptive-tables.R
+
+t1 = compare_population(copd_study2, 
+    populationVar = admission.copd_exacerbation_status,
+    comparisonVars = vars(
+      outcome.STEMI,
+      outcome.NSTEMI,
+      outcome.PE,
+      outcome.DVT,
+      outcome.stroke,
+      outcome.new_AF,
+      outcome.heart_failure,
+      outcome.acute_renal_failure,
+      outcome.no_complications
+    ),
+    p.value=TRUE,na.rm = TRUE
+) 
+
+t1 = t1 %>% population_comparison_table(compact = TRUE,show_method = FALSE)
+
+
+t2 = compare_population(covid_positive_subgroup, 
+    populationVar = admission.copd_ilrtd_status,
+    comparisonVars = vars(
+      outcome.STEMI,
+      outcome.NSTEMI,
+      outcome.PE,
+      outcome.DVT,
+      outcome.stroke,
+      outcome.new_AF,
+      outcome.heart_failure,
+      outcome.acute_renal_failure,
+      outcome.no_complications
+    ),
+    p.value=TRUE,na.rm = TRUE
+) 
+
+t2 = t2 %>% population_comparison_table(compact = TRUE,show_method = FALSE)
+
+
+t3 = compare_population(covid_negative_subgroup, 
+    populationVar = admission.copd_ilrtd_status,
+    comparisonVars = vars(
+      outcome.STEMI,
+      outcome.NSTEMI,
+      outcome.PE,
+      outcome.DVT,
+      outcome.stroke,
+      outcome.new_AF,
+      outcome.heart_failure,
+      outcome.acute_renal_failure,
+      outcome.no_complications
+    ),
+    p.value=TRUE,na.rm = TRUE
+) 
+
+t3 = t3 %>% population_comparison_table(compact = TRUE,show_method = FALSE)
+
+t = t1 %>% huxtable::add_columns(t2[3:5]) %>% huxtable::add_columns(t3[3:5]) %>% hux_nest_group(col=1)
+
+t %>% hux_set_font(defaultFontSize = 6) %>%
+  hux_save_as(out("tab2-outcome-comparison"),formats = c("html","pdf","png"))
+
+
+
+```
+
+
+```{r}
+
+copd_study2 = copd_study2 %>% mutate(across(.cols = where(is.ordered), .fns = factor, ordered=FALSE))
+
+allVars = vars(
+      admission.ilrtd_status,    
+      admission.copd_exacerbation_status,
+      demog.age,
+      demog.gender,
+      demog.ethnicity,
+      admission.cci_category,
+      demog.imd_decile,
+      demog.smoker,
+      admission.on_inhaled_corticosteroids)
+
+copd_impute = avoncap:::impute_data(copd_study2, allVars)
+
+```
+
+
+```{r}
+form = . ~ admission.ilrtd_status + admission.copd_exacerbation_status+demog.age+
+      demog.gender+demog.ethnicity+admission.cci_category+demog.imd_decile+
+      demog.smoker+admission.on_inhaled_corticosteroids
+
+modelConfig = tibble::tribble(
+    ~modelName, ~form,
+    "STEMI", update(form,outcome.STEMI ~ .),
+    "NSTEMI", update(form,outcome.NSTEMI ~ .),
+    "PE", update(form,outcome.PE ~ .),
+    "DVT", update(form,outcome.DVT ~ .),
+    "Stroke", update(form,outcome.stroke ~ .),
+    "New AF", update(form,outcome.new_AF ~ .),
+    "HF", update(form,outcome.heart_failure ~ .),
+    "ARF", update(form,outcome.acute_renal_failure ~ .)
+)
+
+copd_qp_model = avoncap:::run_models(copd_impute, modelConfig, avoncap:::logistic_regression)
+
+combinedTable = copd_qp_model %>% summarise_boots(allVars, statistic = "OR") 
+
+combinedTable  %>% hux_auto_widths() %>%
+  hux_save_as(out("tab3-relative-risk-models"),formats = c("html","pdf","png"))
+
+# tmp = mice::complete(copd_impute,1)
+# tmp %>% group_by(admission.ilrtd_status) %>% count()
+
+```
+
+```{r}
+form = . ~ admission.copd_ilrtd_status + demog.age+
+      demog.gender+demog.ethnicity+admission.cci_category+demog.imd_decile+
+      demog.smoker+admission.on_inhaled_corticosteroids
+
+modelConfig = tibble::tribble(
+    ~modelName, ~form,
+    "STEMI", update(form,outcome.STEMI ~ .),
+    "NSTEMI", update(form,outcome.NSTEMI ~ .),
+    "PE", update(form,outcome.PE ~ .),
+    "DVT", update(form,outcome.DVT ~ .),
+    "Stroke", update(form,outcome.stroke ~ .),
+    "New AF", update(form,outcome.new_AF ~ .),
+    "HF", update(form,outcome.heart_failure ~ .),
+    "ARF", update(form,outcome.acute_renal_failure ~ .)
+)
+
+copd_qp_model = avoncap:::run_models(copd_impute, modelConfig, avoncap:::logistic_regression)
+
+combinedTable = copd_qp_model %>% summarise_boots(vars(
+      admission.copd_ilrtd_status,    
+      demog.age,
+      demog.gender,
+      demog.ethnicity,
+      admission.cci_category,
+      demog.imd_decile,
+      demog.smoker,
+      admission.on_inhaled_corticosteroids), statistic = "OR") 
+
+combinedTable  %>% hux_auto_widths() %>%
+  hux_save_as(out("tab4-relative-risk-interaction-models"),formats = c("html","pdf","png"))
+
+# tmp = mice::complete(copd_impute,1)
+# tmp %>% group_by(admission.ilrtd_status) %>% count()
 
 ```

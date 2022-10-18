@@ -207,7 +207,8 @@ caseVsControl =
 ```{r}
 omicronVsControl = 
   bind_rows(
-    tmp %>% mutate(odds_ratio_ve(vaccinatedCase = roll_omicron_2vacc,unvaccinatedCase = roll_omicron_novacc,vaccinatedControl = roll_control_2vacc, unvaccinatedControl = roll_control_novacc)) %>% mutate(doses = "two doses"),
+    tmp %>% 
+      mutate(odds_ratio_ve(vaccinatedCase = roll_omicron_2vacc,unvaccinatedCase = roll_omicron_novacc,vaccinatedControl = roll_control_2vacc, unvaccinatedControl = roll_control_novacc)) %>% mutate(doses = "two doses"),
     tmp %>% mutate(odds_ratio_ve(vaccinatedCase = roll_omicron_3vacc,unvaccinatedCase = roll_omicron_novacc,vaccinatedControl = roll_control_3vacc, unvaccinatedControl = roll_control_novacc)) %>% mutate(doses = "three doses")
   )
 ```
@@ -227,28 +228,9 @@ plotData = bind_rows(
   omicronVsControl %>% mutate(comparison = "omicron vs controls")
 )
   
-p = ggplot(plotData, aes(x=admission.date, y=VE*100, ymin=VE.q.0.025*100, ymax=VE.q.0.975*100))+geom_line(aes(colour=doses))+geom_ribbon(aes(fill=doses),alpha=0.2)+coord_cartesian(ylim=c(-50,100))+facet_wrap(vars(comparison),ncol=1)+ylab("VE (%)")
+p = ggplot(plotData, aes(x=admission.date, y=VE*100, ymin=VE.OR.q.0.025*100, ymax=VE.OR.q.0.975*100))+geom_line(aes(colour=doses))+geom_ribbon(aes(fill=doses),alpha=0.2)+coord_cartesian(ylim=c(-50,100))+facet_wrap(vars(comparison),ncol=1)+ylab("VE (%)")
 p %>% ggrrr::gg_save_as(out("fig2-ve-case-control"),size = ggrrr::std_size$full)
 ```
 
-## Comparison tables
-
-```{r}
-
-# I've looked at a set of functions to generate comparison tables
-# there are in descriptive-tables.R
-
-t = compare_population(copd_study, 
-    populationVar = comorbid.copd,
-    comparisonVars = vars(
-      demog.age,
-      demog.gender,
-      demog.ethnicity
-    )
-) %>% population_comparison_table()
-
-# ggrrr has some functions to render tables into different formats. 
-# although docx seems not to be working 
-t %>% hux_save_as(out("tab1-random-comparison.html"))
 
 ```
