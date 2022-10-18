@@ -132,6 +132,7 @@ tmp = raw_data %>% compare_population(
   # admission.BMI,
   # admission.charlson_comorbidity_index,
   admission.cci_category,
+  admission.rockwood_score,
   qcovid2.hazard_ratio,
   vaccination.vaccination,
   admission.on_immunosuppression
@@ -399,6 +400,8 @@ comp = comp %>% mutate(invalid_features = purrr::map(missing, ~
 ))
 
 mnar = unique(unlist(comp$invalid_features))
+# N.b. this actually selects out
+mnar = "demog.imd_decile"
 excludedlist = readable_label_mapping(lapply(mnar,as.symbol)) %>% unname() %>% paste0(collapse = ", ")
 
 allVars = aprioriVars[!as_label(aprioriVars) %in% mnar]
@@ -454,7 +457,7 @@ captions = list(
   table1 = "Feature selection for the comparison of the binary outcome {outcome}. Significance tests describe the null hypothesis that the distribution of the explainatory variable is the same for both outcomes. p-values are given both excluding missing data, and, in parentheses, incuding missing data.",
   table2 = "Impact of missing values on the comparison of the binary outcome {outcome}. Significance tests describe the null hypothesis that the distribution of missing values is the same for both outcomes. High p-values indicate data is missing at random, compared to the outcome {outcome}. Low p-values suggest a systematic interaction between missing data and outcome. Not all data points are collected for all patients.",
   table3 = "Features relevant to the comparison of the binary outcome {outcome}. These variables are demonstrated to be different between the two outcomes (p<0.05 excluding missing, p<0.1 including missing data) and exclude items where a systematic interaction between the missing data and outcomes is observed (p<0.05). P-values given in this table are for the null hypothesis that there is no association between this variable and the outcome {outcome}.",
-  table4 = "Univariate and multivariate robust poisson regression coefficients for the comparison of the binary outcome {outcome}. The univariate effects of each predictor are shown in the first column, the multivariate adjustment of all variables together, excluding the QCovid2 score is in the second column. The third column is a regression model focussing on the statistically significant variables, vaccination status, genomic variant, and the QCovid2 score. The fourth column is a regression model focussing on the statistically significant variables, vaccination status, genomic variant, Charlson comorbidity score, and age as a categorical value.",
+  table4 = "Univariate and multivariate robust poisson regression coefficients for the comparison of the binary outcome {outcome}. The univariate effects of each predictor are shown in the first column, the multivariate adjustment of all variables together, excluding the QCovid2 score is in the second column. The third column is a regression model focussing on the key variables, vaccination status, genomic variant, and the QCovid2 score. The fourth column is a regression model focussing on the key variables, vaccination status, genomic variant, Charlson comorbidity score, and age as a categorical value.",
   table5 = "The performance of multivariate robust poisson models for the comparison of the binary outcome {outcome}. The Akiake information criterion, AIC, and Baeysian information criteria, BIC, describe the information lost by the model and lower numbers are better. Nagelkurke's R2 coefficient of determination is a psuedo R^2 meausure where higher numbers are better. RMSE is root mean squared error and Sigma is the residual standard deviation, a measure of the remaining unexpained variation in the data."
 )
 
